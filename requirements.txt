@@ -1,0 +1,7 @@
+yfinance
+nsetools
+ta
+pandas
+numpy
+python-dotenv
+lxml
