@@ -1,15 +1,20 @@
-# 📈 Stock Momentum Alert (Dockerized)
+# Stock Alert App (Starter Full Stack)
 
-Analyzes Indian stocks for 15%+ upward momentum in 3 months and sends email alerts for:
-- 📉 Stocks to Exit
-- 🚀 Stocks to Watch
+Services:
+- **edge**: Traefik edge router (port 80 -> frontend and API Gateway)
+- **api-gateway**: FastAPI BFF proxying to backend services
+- **auth-service**: FastAPI + Postgres + Alembic (users + JWT)
+- **user-service**: FastAPI + Postgres + Alembic (portfolios & watchlists)
+- **analyzer-service**: FastAPI (dummy analysis stub)
+- **notifier-service**: FastAPI (dummy notifier stub)
+- **db**: Postgres
+- **redpanda**: Kafka-compatible broker
+- **frontend**: React (Vite)
 
-## 🔧 Setup
-
-1. Update `config.py` with your Gmail & app password
-2. Add your current holdings to `invested_stocks.csv`
-
-## 🐳 Run via Docker
-
+## Quick start
 ```bash
-docker-compose up --build
+docker compose up --build
+```
+- App UI: http://localhost
+- API Gateway: http://localhost/api/health
+- Auth service: http://localhost/auth/health (via Traefik routes) or internal http://auth-service:8003/health

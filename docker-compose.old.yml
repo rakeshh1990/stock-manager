@@ -1,0 +1,10 @@
+services:
+  stock-alert:
+    build: .
+    container_name: stock_alert
+    volumes:
+      - .:/app
+    environment:
+      - TZ=Asia/Kolkata
+    env_file:
+      - .env

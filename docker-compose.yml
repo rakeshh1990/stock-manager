@@ -1,10 +1,122 @@
+version: "3.9"
+
 services:
-  stock-alert:
-    build: .
-    container_name: stock_alert
+  # Traefik edge/router
+  edge:
+    image: traefik:v3.0
+    command:
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+      - "8080:8080" # Traefik dashboard
     volumes:
-      - .:/app
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # PostgreSQL
+  db:
+    image: postgres:15
     environment:
-      - TZ=Asia/Kolkata
-    env_file:
-      - .env
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  # Redpanda Kafka
+  redpanda:
+    image: redpandadata/redpanda:latest
+    command: >
+      redpanda start --overprovisioned --smp 1 --memory 512M --reserve-memory 0M
+      --node-id 0 --check=false --kafka-addr 0.0.0.0:9092 --advertise-kafka-addr redpanda:9092
+    ports:
+      - "9092:9092"
+
+  # API Gateway
+  api-gateway:
+    build: ./api-gateway
+    env_file: .env
+    depends_on:
+      - analyzer-service
+      - notifier-service
+      - auth-service
+      - user-service
+    expose:
+      - "8000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gateway.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.gateway.entrypoints=web"
+      - "traefik.http.services.gateway.loadbalancer.server.port=8000"
+      - "traefik.http.middlewares.strip-api.stripPrefix.prefixes=/api"
+      - "traefik.http.routers.gateway.middlewares=strip-api@docker"
+
+  # Auth Service
+  auth-service:
+    build: ./backend/auth-service
+    env_file: .env
+    environment:
+      SERVICE_PORT: 8003
+      DB_NAME: auth_db
+    depends_on:
+      - db
+    expose:
+      - "8003"
+    labels:
+      - "traefik.enable=false"
+
+  # User Service
+  user-service:
+    build: ./backend/user-service
+    env_file: .env
+    environment:
+      SERVICE_PORT: 8004
+      DB_NAME: user_db
+    depends_on:
+      - db
+    expose:
+      - "8004"
+    labels:
+      - "traefik.enable=false"
+
+  # Analyzer Service
+  analyzer-service:
+    build: ./backend/analyzer-service
+    env_file: .env
+    environment:
+      SERVICE_PORT: 8002
+    expose:
+      - "8002"
+    labels:
+      - "traefik.enable=false"
+
+  # Notifier Service
+  notifier-service:
+    build: ./backend/notifier-service
+    env_file: .env
+    environment:
+      SERVICE_PORT: 8001
+    expose:
+      - "8001"
+    labels:
+      - "traefik.enable=false"
+
+  # Frontend
+  frontend:
+    build: ./frontend
+    expose:
+      - "80"
+    depends_on:
+      - api-gateway
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.frontend.entrypoints=web"
+      - "traefik.http.services.frontend.loadbalancer.server.port=80"
+
+
+volumes:
+  db_data:
