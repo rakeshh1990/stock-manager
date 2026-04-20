@@ -1,7 +1,7 @@
 version: "3.9"
 
 services:
-  # Traefik edge/router
+  # Traefik edge/router - Handles all incoming traffic and routes it based on labels
   edge:
     image: traefik:v3.0
     command:
@@ -9,12 +9,14 @@ services:
       - "--providers.docker=true"
       - "--entrypoints.web.address=:80"
     ports:
-      - "80:80"
-      - "8080:8080" # Traefik dashboard
+      - "80:80"       # The main entrypoint for the application
+      - "8080:8080"   # Traefik dashboard
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - stock-network # Connect to the application network
 
-  # PostgreSQL
+  # PostgreSQL Database - For persistent storage
   db:
     image: postgres:15
     environment:
@@ -23,19 +25,23 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - db_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    networks:
+      - stock-network
+    # ports: # Removed external port mapping for security unless needed for local tooling
+    #   - "5432:5432"
 
-  # Redpanda Kafka
+  # Redpanda Kafka - For asynchronous communication (e.g., Notifier Service)
   redpanda:
     image: redpandadata/redpanda:latest
     command: >
       redpanda start --overprovisioned --smp 1 --memory 512M --reserve-memory 0M
       --node-id 0 --check=false --kafka-addr 0.0.0.0:9092 --advertise-kafka-addr redpanda:9092
     ports:
-      - "9092:9092"
+      - "9092:9092" # External access for Kafka clients if needed
+    networks:
+      - stock-network
 
-  # API Gateway
+  # API Gateway (FastAPI) - Routes and orchestrates microservice calls
   api-gateway:
     build: ./api-gateway
     env_file: .env
@@ -45,7 +51,7 @@ services:
       - auth-service
       - user-service
     expose:
-      - "8000"
+      - "8000" # Internal port for Traefik access
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.gateway.rule=PathPrefix(`/api`)"
@@ -53,6 +59,8 @@ services:
       - "traefik.http.services.gateway.loadbalancer.server.port=8000"
       - "traefik.http.middlewares.strip-api.stripPrefix.prefixes=/api"
       - "traefik.http.routers.gateway.middlewares=strip-api@docker"
+    networks:
+      - stock-network
 
   # Auth Service
   auth-service:
@@ -66,7 +74,9 @@ services:
     expose:
       - "8003"
     labels:
-      - "traefik.enable=false"
+      - "traefik.enable=false" # Traefik should not expose backend services directly
+    networks:
+      - stock-network
 
   # User Service
   user-service:
@@ -81,6 +91,8 @@ services:
       - "8004"
     labels:
       - "traefik.enable=false"
+    networks:
+      - stock-network
 
   # Analyzer Service
   analyzer-service:
@@ -92,6 +104,8 @@ services:
       - "8002"
     labels:
       - "traefik.enable=false"
+    networks:
+      - stock-network
 
   # Notifier Service
   notifier-service:
@@ -103,20 +117,31 @@ services:
       - "8001"
     labels:
       - "traefik.enable=false"
+    networks:
+      - stock-network
 
-  # Frontend
+  # Frontend (React/Vite)
   frontend:
     build: ./frontend
+    # NOTE: The Dockerfile runs 'serve' on port 3000. Traefik must look for 3000.
     expose:
-      - "80"
+      - "3000"
     depends_on:
       - api-gateway
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.frontend.rule=PathPrefix(`/`)"
       - "traefik.http.routers.frontend.entrypoints=web"
-      - "traefik.http.services.frontend.loadbalancer.server.port=80"
-
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000" # <-- FIXED PORT to 3000
+    environment:
+      # Correct YAML syntax and path: Traefik resolves this internally.
+      VITE_API_BASE_URL: http://api-gateway:8000
+    networks:
+      - stock-network
 
 volumes:
-  db_data:
+  db_data: # Define the volume for PostgreSQL data persistence
+
+networks:
+  stock-network:
+    driver: bridge # Explicitly define the custom bridge network

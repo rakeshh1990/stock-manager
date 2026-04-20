@@ -1,49 +1,258 @@
-from fastapi import FastAPI, Request, HTTPException, Depends
-import httpx, os
+import os
+import logging
+import httpx
+from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="Stock Alert API Gateway")
+from .deps import get_current_user, CurrentUser
+from .middleware import RequestLoggingMiddleware
 
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+logger = logging.getLogger("gateway")
+
+# ---------------------------------------------------------------------------
+# App
+# ---------------------------------------------------------------------------
+app = FastAPI(
+    title="Stock Alert — API Gateway",
+    version="1.1.0",
+    description="BFF gateway with JWT validation and upstream proxying.",
+)
+
+# CORS — tighten origins in production
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.add_middleware(RequestLoggingMiddleware)
+
+# ---------------------------------------------------------------------------
+# Upstream URLs
+# ---------------------------------------------------------------------------
 ANALYZER_URL = os.getenv("ANALYZER_URL", "http://analyzer-service:8002")
 NOTIFIER_URL = os.getenv("NOTIFIER_URL", "http://notifier-service:8001")
-AUTH_URL = os.getenv("AUTH_URL", "http://auth-service:8003")
-USER_URL = os.getenv("USER_URL", "http://user-service:8004")
+AUTH_URL     = os.getenv("AUTH_URL",     "http://auth-service:8003")
+USER_URL     = os.getenv("USER_URL",     "http://user-service:8004")
 
-@app.get("/health")
+
+def _auth_headers(user: CurrentUser) -> dict:
+    """
+    Build headers that downstream services use to identify the caller.
+    Services must NEVER accept these headers from untrusted external callers —
+    they are only injected by the gateway after token validation.
+    """
+    return {
+        "X-User-Id":    str(user.user_id),
+        "X-User-Email": user.email,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Public routes  (no auth required)
+# ---------------------------------------------------------------------------
+
+@app.get("/health", tags=["ops"])
 async def health():
     return {"status": "ok", "service": "api-gateway"}
 
-@app.post("/auth/register")
+
+@app.post("/auth/register", tags=["auth"])
 async def register(payload: dict):
+    """Proxy registration to auth-service. No token required."""
     async with httpx.AsyncClient() as client:
         r = await client.post(f"{AUTH_URL}/register", json=payload, timeout=15)
-        return r.json()
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.json().get("detail"))
+    return r.json()
 
-@app.post("/auth/login")
+
+@app.post("/auth/login", tags=["auth"])
 async def login(payload: dict):
+    """Proxy login to auth-service. Returns JWT on success."""
     async with httpx.AsyncClient() as client:
         r = await client.post(f"{AUTH_URL}/login", json=payload, timeout=15)
-        return r.json()
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.json().get("detail"))
+    return r.json()
 
-@app.get("/portfolio")
-async def get_portfolio(user_id: int):
-    async with httpx.AsyncClient() as client:
-        r = await client.get(f"{USER_URL}/portfolio/{user_id}", timeout=15)
-        return r.json()
 
-@app.post("/portfolio")
-async def set_portfolio(payload: dict):
-    async with httpx.AsyncClient() as client:
-        r = await client.post(f"{USER_URL}/portfolio", json=payload, timeout=15)
-        return r.json()
+# ---------------------------------------------------------------------------
+# Protected routes  (valid JWT required)
+# ---------------------------------------------------------------------------
 
-@app.get("/analyze")
-async def analyze(symbol: str = "RELIANCE.NS"):
-    async with httpx.AsyncClient() as client:
-        r = await client.get(f"{ANALYZER_URL}/analyze", params={"symbol": symbol}, timeout=30)
-        return r.json()
+# --- Portfolio ----------------------------------------------------------
 
-@app.post("/notify")
-async def notify(payload: dict):
+@app.get("/portfolio", tags=["portfolio"])
+async def get_portfolio(user: CurrentUser = Depends(get_current_user)):
+    """Fetch the portfolio for the authenticated user."""
     async with httpx.AsyncClient() as client:
-        r = await client.post(f"{NOTIFIER_URL}/notify", json=payload, timeout=15)
+        r = await client.get(
+            f"{USER_URL}/portfolio/{user.user_id}",
+            headers=_auth_headers(user),
+            timeout=15,
+        )
+    return r.json()
+
+
+@app.post("/portfolio", tags=["portfolio"])
+async def set_portfolio(payload: dict, user: CurrentUser = Depends(get_current_user)):
+    """
+    Set portfolio symbols for the authenticated user.
+    user_id is taken from the JWT — the client cannot spoof it.
+    """
+    payload["user_id"] = user.user_id
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{USER_URL}/portfolio",
+            json=payload,
+            headers=_auth_headers(user),
+            timeout=15,
+        )
+    return r.json()
+
+
+# --- Analyzer -----------------------------------------------------------
+
+@app.get("/analyse", tags=["analysis"])
+async def analyse(symbol: str = "RELIANCE.NS", user: CurrentUser = Depends(get_current_user)):
+    """
+    Run full technical analysis on a stock symbol.
+    Requires authentication so we can rate-limit per user later.
+    """
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{ANALYZER_URL}/analyse",
+            params={"symbol": symbol},
+            headers=_auth_headers(user),
+            timeout=30,
+        )
+    if r.status_code != 200:
+        logger.error(f"Analyzer error {r.status_code}: {r.text}")
+        raise HTTPException(
+            status_code=r.status_code,
+            detail=f"Analyzer service error: {r.status_code}",
+        )
+    try:
         return r.json()
+    except Exception:
+        logger.error("Analyzer returned non-JSON response")
+        raise HTTPException(status_code=502, detail="Analyzer returned invalid response")
+
+
+# --- Notifier -----------------------------------------------------------
+
+@app.post("/notify", tags=["notifications"])
+async def notify(payload: dict, user: CurrentUser = Depends(get_current_user)):
+    """Send a notification on behalf of the authenticated user."""
+    payload["user_id"] = user.user_id
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{NOTIFIER_URL}/notify",
+            json=payload,
+            headers=_auth_headers(user),
+            timeout=15,
+        )
+    return r.json()
+
+
+# ---------------------------------------------------------------------------
+# Watchlists  (proxied to user-service, user_id injected from JWT)
+# ---------------------------------------------------------------------------
+
+@app.get("/watchlists", tags=["watchlists"])
+async def list_watchlists(user: CurrentUser = Depends(get_current_user)):
+    """List all watchlists for the authenticated user."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{USER_URL}/watchlists",
+            headers=_auth_headers(user),
+            timeout=15,
+        )
+    return r.json()
+
+
+@app.post("/watchlists", tags=["watchlists"], status_code=201)
+async def create_watchlist(payload: dict, user: CurrentUser = Depends(get_current_user)):
+    """Create a new named watchlist."""
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{USER_URL}/watchlists",
+            json=payload,
+            headers=_auth_headers(user),
+            timeout=15,
+        )
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.json().get("detail"))
+    return r.json()
+
+
+@app.get("/watchlists/{watchlist_id}", tags=["watchlists"])
+async def get_watchlist(watchlist_id: int, user: CurrentUser = Depends(get_current_user)):
+    """Get a watchlist with all its items."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{USER_URL}/watchlists/{watchlist_id}",
+            headers=_auth_headers(user),
+            timeout=15,
+        )
+    if r.status_code == 404:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    return r.json()
+
+
+@app.delete("/watchlists/{watchlist_id}", tags=["watchlists"], status_code=204)
+async def delete_watchlist(watchlist_id: int, user: CurrentUser = Depends(get_current_user)):
+    """Delete a watchlist and all its items."""
+    async with httpx.AsyncClient() as client:
+        r = await client.delete(
+            f"{USER_URL}/watchlists/{watchlist_id}",
+            headers=_auth_headers(user),
+            timeout=15,
+        )
+    if r.status_code == 404:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+
+
+@app.post("/watchlists/{watchlist_id}/items", tags=["watchlists"], status_code=201)
+async def add_watchlist_item(
+    watchlist_id: int,
+    payload: dict,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Add a symbol to a watchlist."""
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{USER_URL}/watchlists/{watchlist_id}/items",
+            json=payload,
+            headers=_auth_headers(user),
+            timeout=15,
+        )
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.json().get("detail"))
+    return r.json()
+
+
+@app.delete("/watchlists/{watchlist_id}/items/{symbol}", tags=["watchlists"], status_code=204)
+async def remove_watchlist_item(
+    watchlist_id: int,
+    symbol: str,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Remove a symbol from a watchlist."""
+    async with httpx.AsyncClient() as client:
+        r = await client.delete(
+            f"{USER_URL}/watchlists/{watchlist_id}/items/{symbol}",
+            headers=_auth_headers(user),
+            timeout=15,
+        )
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.json().get("detail"))

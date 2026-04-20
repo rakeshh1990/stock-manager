@@ -9,7 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy requirements and install
 COPY app/requirements.txt /app/app/requirements.txt
-RUN pip install --no-cache-dir -r /app/app/requirements.txt
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir --default-timeout=100 -r /app/app/requirements.txt
+
 
 # Copy everything
 COPY . .
