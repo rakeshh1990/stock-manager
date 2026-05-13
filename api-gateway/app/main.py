@@ -6,6 +6,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .deps import get_current_user, CurrentUser
 from .middleware import RequestLoggingMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -19,11 +22,18 @@ logger = logging.getLogger("gateway")
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
+# Rate limiter — keyed by client IP
+# Used only on public endpoints to prevent abuse.
+# Authenticated endpoints rely on JWT for identity; per-user limiting comes in Phase 4.
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(
     title="Stock Alert — API Gateway",
     version="1.1.0",
     description="BFF gateway with JWT validation and upstream proxying.",
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS — tighten origins in production
 app.add_middleware(
@@ -66,7 +76,8 @@ async def health():
 
 
 @app.post("/auth/register", tags=["auth"])
-async def register(payload: dict):
+@limiter.limit("5/minute")
+async def register(request: Request, payload: dict):
     """Proxy registration to auth-service. No token required."""
     async with httpx.AsyncClient() as client:
         r = await client.post(f"{AUTH_URL}/register", json=payload, timeout=15)
@@ -76,7 +87,8 @@ async def register(payload: dict):
 
 
 @app.post("/auth/login", tags=["auth"])
-async def login(payload: dict):
+@limiter.limit("10/minute")
+async def login(request: Request, payload: dict):
     """Proxy login to auth-service. Returns JWT on success."""
     async with httpx.AsyncClient() as client:
         r = await client.post(f"{AUTH_URL}/login", json=payload, timeout=15)
@@ -256,3 +268,25 @@ async def remove_watchlist_item(
         )
     if r.status_code >= 400:
         raise HTTPException(status_code=r.status_code, detail=r.json().get("detail"))
+
+
+# ---------------------------------------------------------------------------
+# Public market snapshot — no JWT, used by login page
+# ---------------------------------------------------------------------------
+
+@app.get("/market/snapshot", tags=["market"])
+@limiter.limit("10/minute")
+async def market_snapshot(request: Request, symbol: str = "^NSEI", period: str = "1y"):
+    """
+    Proxy to analyzer /history. Public — no auth required.
+    Returns daily closing prices for the requested symbol and period.
+    """
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{ANALYZER_URL}/history",
+            params={"symbol": symbol, "period": period},
+            timeout=30,
+        )
+    if r.status_code != 200:
+        raise HTTPException(status_code=r.status_code, detail="Market data unavailable")
+    return r.json()

@@ -348,3 +348,77 @@ def analyse(symbol: str):
         note=note
     )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Public price history endpoint — no auth, used by login page market snapshot
+# ---------------------------------------------------------------------------
+
+class PricePoint(BaseModel):
+    date:  str
+    close: float
+
+# ---------------------------------------------------------------------------
+# In-memory cache: keyed by (symbol, period)
+# Stores { "data": [...], "fetched_at": float (epoch) }
+# TTL: 15 minutes — Nifty 50 chart on a login page doesn't need fresher data.
+# This means unlimited login-page loads result in at most 4 yf.download
+# calls per hour, regardless of traffic.
+# ---------------------------------------------------------------------------
+import time as _time
+_history_cache: dict = {}
+_CACHE_TTL_SECONDS = 15 * 60   # 15 minutes
+
+
+@app.get("/history", response_model=list[PricePoint])
+def get_history(symbol: str = "^NSEI", period: str = "1y"):
+    """
+    Return daily closing prices for a symbol over the given period.
+    Public endpoint — no authentication required.
+    Responses are cached in-memory for 15 minutes to avoid hammering
+    Yahoo Finance on every login-page load.
+    """
+    symbol = symbol.strip().upper()
+
+    # Restrict to a safe allowlist — prevents the endpoint being used
+    # as a free proxy to download arbitrary ticker history.
+    ALLOWED_SYMBOLS = {"^NSEI", "^BSESN", "^NSEBANK"}
+    ALLOWED_PERIODS = {"1mo", "3mo", "6mo", "1y", "2y"}
+    if symbol not in ALLOWED_SYMBOLS:
+        raise HTTPException(status_code=400, detail=f"Symbol not allowed: {symbol}")
+    if period not in ALLOWED_PERIODS:
+        raise HTTPException(status_code=400, detail=f"Period not allowed: {period}")
+
+    cache_key = (symbol, period)
+    now = _time.time()
+
+    # Return cached response if still fresh
+    cached = _history_cache.get(cache_key)
+    if cached and (now - cached["fetched_at"]) < _CACHE_TTL_SECONDS:
+        logger.info(f"History cache hit for {symbol} ({period})")
+        return cached["data"]
+
+    logger.info(f"History cache miss for {symbol} ({period}) — fetching from Yahoo Finance")
+    try:
+        df = yf.download(symbol, period=period, interval="1d", progress=False, auto_adjust=True)
+        if df is None or df.empty:
+            raise HTTPException(status_code=404, detail=f"No data for {symbol}")
+        df = df[["Close"]].dropna()
+        result = []
+        for dt, row in df.iterrows():
+            close_val = row["Close"]
+            if hasattr(close_val, "item"):
+                close_val = close_val.item()
+            close_val = float(close_val)
+            if not (isinstance(close_val, float) and (close_val != close_val)):
+                result.append(PricePoint(date=str(dt.date()), close=round(close_val, 2)))
+
+        # Store in cache
+        _history_cache[cache_key] = {"data": result, "fetched_at": now}
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"History fetch failed for {symbol}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch price history")

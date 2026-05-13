@@ -1,54 +1,209 @@
 import { useState } from "react";
-import axios from "axios";
-import { Card, CardContent } from "@/components/ui/card";
+import LoginPage     from "./pages/LoginPage";
+import AnalysePage   from "./pages/AnalysePage";
+import PortfolioPage from "./pages/PortfolioPage";
+import WatchlistPage from "./pages/WatchlistPage";
 
-function App() {
-  const [symbol, setSymbol] = useState("");
-  const [data, setData] = useState(null);
+const NAV = [
+  {
+    id: "analyse",
+    label: "Analyse",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path d="M2 11l3-4 3 2 3-5 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        <circle cx="14" cy="7" r="1" fill="currentColor"/>
+      </svg>
+    ),
+  },
+  {
+    id: "watchlist",
+    label: "Watchlists",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+        <path d="M5 8h6M5 5.5h6M5 10.5h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+      </svg>
+    ),
+  },
+  {
+    id: "portfolio",
+    label: "Portfolio",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <rect x="2" y="6" width="12" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.5"/>
+        <path d="M5 6V4.5A3 3 0 0111 4.5V6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+      </svg>
+    ),
+  },
+];
 
-  const handleAnalyse = async () => {
-    try {
-      const res = await axios.get(`${import.meta.env.VITE_API_BASE_URL}/analyse`, {
-        params: { symbol }
-      });
-      setData(res.data);
-    } catch (e) {
-      alert("Failed to fetch data");
-    }
+export default function App() {
+  const [token, setToken] = useState(() => localStorage.getItem("sa_token"));
+  const [email, setEmail] = useState(() => localStorage.getItem("sa_email") ?? "");
+  const [page, setPage]   = useState("analyse");
+
+  const handleLogin = (newToken, newEmail) => {
+    setToken(newToken);
+    setEmail(newEmail);
   };
 
+  const handleLogout = () => {
+    localStorage.removeItem("sa_token");
+    localStorage.removeItem("sa_email");
+    setToken(null);
+    setEmail("");
+  };
+
+  if (!token) return <LoginPage onLogin={handleLogin} />;
+
+  const initials = email ? email[0].toUpperCase() : "U";
+
   return (
-    <div className="min-h-screen flex flex-col items-center p-10 bg-gray-50">
-      <h1 className="text-3xl font-bold mb-5">📈 Stock Analyzer</h1>
+    <div style={{ display: "flex", minHeight: "100vh" }}>
+      {/* Sidebar */}
+      <aside style={{
+        width: 220,
+        minHeight: "100vh",
+        background: "var(--sidebar-bg)",
+        borderRight: "1px solid var(--sidebar-border)",
+        display: "flex",
+        flexDirection: "column",
+        padding: "24px 0",
+        position: "fixed",
+        top: 0,
+        left: 0,
+        zIndex: 20,
+      }}>
+        {/* Logo */}
+        <div style={{ padding: "0 20px 28px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{
+              width: 32, height: 32,
+              background: "var(--accent)",
+              borderRadius: 8,
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M2 12l3-5 3 3 3-6 3 4" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </div>
+            <div>
+              <div style={{ color: "#fff", fontSize: 13, fontWeight: 600, letterSpacing: "0.01em" }}>
+                StockAlert
+              </div>
+              <div style={{ color: "#4a4f6a", fontSize: 10, marginTop: 1 }}>
+                Personal Dashboard
+              </div>
+            </div>
+          </div>
+        </div>
 
-      <div className="flex gap-2">
-        <input
-          className="border p-2 rounded w-64"
-          placeholder="Enter symbol (e.g. INFY.NS)"
-          value={symbol}
-          onChange={e => setSymbol(e.target.value)}
-        />
-        <button
-          onClick={handleAnalyse}
-          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-        >
-          Analyze
-        </button>
-      </div>
+        {/* Nav */}
+        <nav style={{ flex: 1, padding: "0 10px" }}>
+          <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.12em", color: "#3a3f58", padding: "0 10px 8px", textTransform: "uppercase" }}>
+            Navigation
+          </div>
+          {NAV.map((item) => {
+            const active = page === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => setPage(item.id)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  width: "100%",
+                  padding: "9px 10px",
+                  borderRadius: 8,
+                  border: "none",
+                  background: active ? "rgba(22,163,74,0.12)" : "transparent",
+                  color: active ? "var(--accent)" : "#8a90ab",
+                  fontSize: 13,
+                  fontWeight: active ? 600 : 400,
+                  cursor: "pointer",
+                  marginBottom: 2,
+                  textAlign: "left",
+                  transition: "all 0.15s",
+                }}
+                onMouseEnter={(e) => { if (!active) { e.currentTarget.style.background = "rgba(255,255,255,0.05)"; e.currentTarget.style.color = "#c8cde0"; } }}
+                onMouseLeave={(e) => { if (!active) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#8a90ab"; } }}
+              >
+                {item.icon}
+                {item.label}
+              </button>
+            );
+          })}
+        </nav>
 
-      {data && (
-        <Card className="mt-10 w-full max-w-lg">
-          <CardContent>
-            <h2 className="text-xl font-semibold mb-2">{data.symbol}</h2>
-            <p><b>Latest Close:</b> ₹{data.latest_close}</p>
-            <p><b>RSI:</b> {data.rsi}</p>
-            <p><b>Recommendation:</b> {data.recommendation}</p>
-            <p><b>Note:</b> {data.note}</p>
-          </CardContent>
-        </Card>
-      )}
+        {/* User */}
+        <div style={{
+          margin: "0 10px",
+          padding: "10px",
+          borderTop: "1px solid var(--sidebar-border)",
+          paddingTop: 16,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <div style={{
+              width: 30, height: 30, borderRadius: "50%",
+              background: "#1e2130",
+              border: "1px solid #2e3348",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              color: "#8a90ab", fontSize: 12, fontWeight: 600,
+            }}>
+              {initials}
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ color: "#c8cde0", fontSize: 11, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {email}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleLogout}
+            style={{
+              width: "100%", padding: "7px 10px", borderRadius: 6,
+              border: "1px solid #2e3348", background: "transparent",
+              color: "#6b7191", fontSize: 11, cursor: "pointer",
+              transition: "all 0.15s",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--danger)"; e.currentTarget.style.color = "var(--danger)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#2e3348"; e.currentTarget.style.color = "#6b7191"; }}
+          >
+            Sign out
+          </button>
+        </div>
+      </aside>
+
+      {/* Main content */}
+      <main style={{ marginLeft: 220, flex: 1, minHeight: "100vh", background: "var(--surface-2)" }}>
+        {/* Top bar */}
+        <div style={{
+          height: 52,
+          background: "var(--surface)",
+          borderBottom: "1px solid var(--border)",
+          display: "flex", alignItems: "center",
+          padding: "0 32px",
+          position: "sticky", top: 0, zIndex: 10,
+        }}>
+          <h1 style={{
+            fontFamily: "var(--display)",
+            fontSize: 18,
+            fontWeight: 600,
+            color: "var(--text-primary)",
+            margin: 0,
+          }}>
+            {NAV.find((n) => n.id === page)?.label}
+          </h1>
+        </div>
+
+        {/* Page content */}
+        <div style={{ padding: "32px" }}>
+          {page === "analyse"   && <AnalysePage />}
+          {page === "watchlist" && <WatchlistPage />}
+          {page === "portfolio" && <PortfolioPage />}
+        </div>
+      </main>
     </div>
   );
 }
-
-export default App;
