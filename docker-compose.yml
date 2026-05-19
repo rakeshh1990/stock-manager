@@ -50,6 +50,7 @@ services:
       - notifier-service
       - auth-service
       - user-service
+      - scanner-service
     expose:
       - "8000" # Internal port for Traefik access
     labels:
@@ -119,6 +120,26 @@ services:
       - "traefik.enable=false"
     networks:
       - stock-network
+
+  # Scanner Service
+  scanner-service:
+    build: ./backend/scanner-service
+    container_name: scanner-service
+    env_file: .env
+    environment:
+      DB_NAME: scanner_db
+      SERVICE_PORT: 8005
+      USER_SERVICE_URL: http://user-service:8004
+    expose:
+      - "8005"
+    networks:
+      - stock-network
+    depends_on:
+      - db
+      - user-service
+    labels:
+      - "traefik.enable=false"
+    restart: unless-stopped
 
   # Frontend (React/Vite)
   frontend:

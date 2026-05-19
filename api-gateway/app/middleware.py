@@ -7,22 +7,23 @@ from starlette.types import ASGIApp
 
 logger = logging.getLogger("gateway.access")
 
+# Paths that return streaming responses (SSE).
+# BaseHTTPMiddleware buffers responses before returning them, which
+# completely breaks SSE — the client never receives any events.
+# We detect these paths and skip logging middleware entirely,
+# letting the response pass through the ASGI stack unmodified.
+SSE_PATHS = {"/scan/stream"}
+
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """
-    Logs every request with:
-      - trace_id  : unique per-request UUID (useful when you add Loki later)
-      - method    : HTTP verb
-      - path      : URL path
-      - status    : response status code
-      - duration  : wall-clock ms
-      - user_id   : extracted from X-User-Id header if present (set by deps.py)
-    """
-
     def __init__(self, app: ASGIApp):
         super().__init__(app)
 
     async def dispatch(self, request: Request, call_next) -> Response:
+        # Bypass middleware for SSE endpoints — do NOT buffer streaming responses
+        if request.url.path in SSE_PATHS:
+            return await call_next(request)
+
         trace_id = str(uuid.uuid4())[:8]
         request.state.trace_id = trace_id
 
@@ -35,14 +36,13 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         logger.info(
             "request",
             extra={
-                "trace_id":  trace_id,
-                "method":    request.method,
-                "path":      request.url.path,
-                "status":    response.status_code,
-                "duration":  duration_ms,
-                "user_id":   user_id,
+                "trace_id": trace_id,
+                "method":   request.method,
+                "path":     request.url.path,
+                "status":   response.status_code,
+                "duration": duration_ms,
+                "user_id":  user_id,
             },
         )
-        # Propagate trace_id back to client for debugging
         response.headers["X-Trace-Id"] = trace_id
         return response
