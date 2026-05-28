@@ -7,10 +7,11 @@ A comprehensive stock market scanning and alerting platform with real-time techn
 ### Microservices
 - **edge**: Traefik edge router (port 80) - Routes all incoming traffic
 - **api-gateway**: FastAPI BFF (Backend for Frontend) - Service orchestration layer
-- **scanner-service**: FastAPI - Real-time stock scanning with technical analysis ⭐ **NEW**
+- **scanner-service**: FastAPI - Real-time stock scanning with technical analysis
+- **market-service**: FastAPI + PostgreSQL - Bhavcopy ingestion & price history API ⭐ **NEW**
 - **auth-service**: FastAPI + PostgreSQL + Alembic - User authentication & JWT
 - **user-service**: FastAPI + PostgreSQL + Alembic - Portfolios & watchlists
-- **analyzer-service**: FastAPI (placeholder) - Advanced stock analysis
+- **analyzer-service**: FastAPI - Stock analysis with market-service integration
 - **notifier-service**: FastAPI (placeholder) - Alert notifications
 - **db**: PostgreSQL - Persistent data storage (multi-database per service)
 - **redpanda**: Kafka broker - Async message queue for inter-service communication
@@ -18,11 +19,22 @@ A comprehensive stock market scanning and alerting platform with real-time techn
 
 ## Features
 
-### 🆕 Stock Scanner Service
+### 🆕 Market Service
+Local stock market data ingestion and API for Indian stocks (NSE Bhavcopy data).
+
+#### Capabilities
+- **Bhavcopy Ingestion**: Automated daily ingestion of NSE OHLCV data
+- **Price History API**: Fast local queries - no external API calls or rate limits
+- **Index Constituents**: Fetch & cache NSE index membership (Nifty 50, Nifty 100)
+- **Manual Backfill**: Historical data ingestion for analysis without waiting for daily runs
+- **DB-backed Storage**: PostgreSQL for reliability and complex queries
+
+### Stock Scanner Service
 Real-time technical analysis engine for Indian stocks (NSE).
 
 #### Capabilities
 - **Automatic Stock Screening**: Scan Nifty 50 or Nifty 100 stocks simultaneously
+- **Market-Service Integration**: All price data from local Bhavcopy DB (no external APIs)
 - **Technical Indicators**:
   - RSI (Relative Strength Index) - Momentum oscillator
   - MACD (Moving Average Convergence Divergence) - Trend following
@@ -43,7 +55,7 @@ Automated scoring system (0-10 scale) generating recommendations:
 - ✅ User watchlist integration - Highlights your tracked stocks
 - ✅ Result persistence - Access historical scan data
 - ✅ Concurrent processing - Scans 50-100 stocks in ~30-60 seconds
-- ✅ Intelligent caching - Request throttling to prevent API rate-limiting
+- ✅ Dynamic symbol loading - Index constituents from market-service
 
 #### Scoring Criteria
 ```
@@ -124,6 +136,25 @@ Click any stock row to open the detail drawer:
 
 ### API Endpoints
 
+#### Market Data API
+```bash
+# Get index constituents (e.g., Nifty 50)
+curl "http://localhost/api/market/constituents/nifty50"
+
+# Refresh index constituents cache
+curl -X POST "http://localhost/api/market/constituents/refresh"
+
+# Get OHLCV history for a symbol (last 130 days)
+curl -H "X-User-Id: 1" \
+  "http://localhost/api/market/history/RELIANCE"
+
+# Get ingestion status
+curl "http://localhost/api/market/ingest/status"
+
+# Manually trigger Bhavcopy ingestion
+curl -X POST "http://localhost/api/market/ingest/manual?trade_date=2026-05-28"
+```
+
 #### Scan via API
 ```bash
 # Start real-time scan with SSE streaming
@@ -135,13 +166,13 @@ curl -H "X-User-Id: 1" \
   "http://localhost/api/scan/results"
 ```
 
-#### Scanner Service Direct (Internal)
+#### Internal Service APIs
 ```bash
-# Health check
-curl http://localhost:8005/docs
+# Market Service (port 8006)
+curl "http://localhost:8006/docs"
 
-# Direct scan endpoint (requires scanner-service access)
-curl "http://scanner-service:8005/scan/stream?scope=nifty50"
+# Scanner Service (port 8005)
+curl "http://localhost:8005/docs"
 ```
 
 ---
@@ -151,10 +182,11 @@ curl "http://scanner-service:8005/scan/stream?scope=nifty50"
 ### Project Structure
 ```
 ├── backend/
-│   ├── scanner-service/          # ⭐ NEW: Real-time stock analysis
+│   ├── market-service/            # ⭐ NEW: Bhavcopy ingestion & price API
+│   ├── scanner-service/           # Real-time stock analysis
 │   ├── auth-service/              # User authentication & JWT
 │   ├── user-service/              # Portfolios & watchlists
-│   ├── analyzer-service/          # Placeholder for advanced analysis
+│   ├── analyzer-service/          # Stock analysis with market data
 │   └── notifier-service/          # Placeholder for notifications
 ├── api-gateway/                   # FastAPI BFF layer
 ├── frontend/                      # React + Vite UI
@@ -168,24 +200,27 @@ curl "http://scanner-service:8005/scan/stream?scope=nifty50"
 ```
 1. Frontend → API Gateway (/api/scan/stream)
 2. Gateway → Scanner Service
-3. Scanner fetches 6-month historical OHLCV via yfinance
-4. Computes technical indicators (pandas)
-5. Generates recommendation score
-6. Streams results via SSE
-7. Persists to database
+3. Scanner fetches index constituents from Market Service
+4. For each symbol:
+   - Fetch 200 days of OHLCV from Market Service (local DB, no external calls)
+   - Compute technical indicators (RSI, MACD, MA50, etc.)
+   - Generate recommendation score
+5. Streams results via SSE to frontend
+6. Persists results to scanner-service database
+7. Matches watchlist via user-service API
 ```
 
 #### Threading Model
-- **Thread Pool**: 5 concurrent workers for stock analysis
+- **Thread Pool**: 8 concurrent workers for stock analysis
 - **Async/Await**: Non-blocking SSE streaming
-- **Request Throttling**: 1-3 second delays between API calls
-- **Smart Retries**: 3-attempt exponential backoff on failures
+- **Data Sources**: Market-service only (local DB - no external APIs)
+- **Symbol Resolution**: Dynamic fetching from market-service constituents API
 
 #### Data Sources
-- **Stock Data**: Yahoo Finance via `yfinance` library
-- **Period**: 6 months of daily OHLCV data per stock
-- **Exchange**: NSE (India) with `.NS` suffix
-- **Rate Limiting**: Intelligent backoff to prevent blocks
+- **Stock Data**: NSE Bhavcopy via market-service local PostgreSQL
+- **Price Period**: 200 days of daily OHLCV data per stock
+- **Symbols**: Bare NSE tickers (RELIANCE, INFY, TCS, etc.)
+- **Rate Limiting**: None - all data local
 
 ### Environment Configuration
 
@@ -208,6 +243,8 @@ NOTIFIER_URL=http://notifier-service:8001
 AUTH_URL=http://auth-service:8003
 USER_URL=http://user-service:8004
 SCANNER_URL=http://scanner-service:8005
+MARKET_URL=http://market-service:8006
+MARKET_SERVICE_URL=http://market-service:8006
 KAFKA_BROKER=redpanda:9092
 ```
 
@@ -241,28 +278,29 @@ curl -H "Authorization: Bearer $TOKEN" \
 ## Known Limitations & Future Enhancements
 
 ### Current Limitations
-1. **yfinance Rate Limiting**
-   - Current solution: Random delays (1-3s) between requests
-   - Future: Implement Redis caching layer for 24-hour data freshness
+1. **Bhavcopy Data Lag**
+   - Bhavcopy data is published daily after market close
+   - Scan results reflect previous trading day data
+   - Future: Real-time data ingestion for intraday scans
 
-2. **NSE Data Limitations**
-   - NSE API lacks official historical data endpoint
-   - Using yfinance as workaround (reliable with backoff strategy)
-   - Upgrade path: TwelveData or AlphaVantage paid APIs
+2. **Market-Service Availability**
+   - All scanner and analyzer functions depend on market-service
+   - Data freshness depends on daily ingestion schedule
+   - Future: Scheduled background jobs for automated daily ingestion
 
 3. **Placeholder Services**
-   - Analyzer Service: Ready for ML-based advanced analysis
    - Notifier Service: Ready for Kafka-driven alerts
 
 ### Planned Enhancements
-- [ ] Redis caching for stock data (24h TTL)
+- [ ] Scheduled background jobs for daily Bhavcopy ingestion (APScheduler integration)
+- [ ] Redis caching for constitutent updates (6-hour TTL)
+- [ ] Real-time market data integration
 - [ ] Advanced filtering on scanner results
 - [ ] Alert creation from scan recommendations
 - [ ] Email/push notifications for watchlist stocks
 - [ ] Portfolio performance tracking
 - [ ] Historical scan result comparisons
 - [ ] Price alerts at support/resistance levels
-- [ ] Upgrade to paid stock API (TwelveData/AlphaVantage)
 
 ---
 
@@ -272,19 +310,30 @@ curl -H "Authorization: Bearer $TOKEN" \
 **Problem**: "No data returned for {symbol}" in logs
 
 **Solutions**:
-1. Check API rate limiting: Add delays between requests
-2. Verify network connectivity: `docker compose exec scanner-service curl https://query1.finance.yahoo.com`
-3. Restart service: `docker compose restart scanner-service`
-4. Check logs: `docker compose logs -f scanner-service`
+1. Check market-service is running: `docker compose ps market-service`
+2. Verify Bhavcopy data was ingested: `docker compose logs market-service | grep "Ingested"`
+3. Check database connectivity: `docker compose exec market-service curl http://localhost:8006/health`
+4. Restart service: `docker compose restart scanner-service market-service`
+5. Check logs: `docker compose logs -f scanner-service`
+
+### Market-Service Symbols Not Found
+**Problem**: "404 No data for {symbol}" when querying market history
+
+**Solutions**:
+1. Run backfill script: `./backend/market-service/backfill.sh <token> <days>`
+2. Verify symbol spelling: Use bare NSE tickers (RELIANCE, not RELIANCE.NS)
+3. Check constituents cache: `curl http://localhost/api/market/constituents/nifty50`
+4. Refresh constituents: `curl -X POST http://localhost/api/market/constituents/refresh`
 
 ### SSE Stream Not Updating
 **Problem**: Frontend shows "Connecting..." indefinitely
 
 **Solutions**:
-1. Verify API Gateway middleware: Check SSE path bypass is configured
+1. Verify API Gateway is running: `docker compose ps api-gateway`
 2. Check CORS headers: `curl -i http://localhost/api/scan/stream`
 3. Restart gateway: `docker compose restart api-gateway`
-4. Browser console logs: Check for WebSocket/EventSource errors
+4. Browser console logs: Check for EventSource errors
+5. Verify market-service availability: `docker compose logs market-service`
 
 ### Database Connection Issues
 **Problem**: Service fails to connect to PostgreSQL
@@ -293,7 +342,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 1. Check DB is running: `docker compose ps db`
 2. Verify credentials in `.env`
 3. Check network: `docker compose exec db psql -U stock -d stockdb -c "SELECT 1"`
-4. Run migrations: `docker compose exec scanner-service alembic upgrade head`
+4. Run migrations: `docker compose exec market-service alembic upgrade head`
 
 ---
 
@@ -306,7 +355,8 @@ curl -H "Authorization: Bearer $TOKEN" \
 - **ORM**: SQLAlchemy
 - **Migrations**: Alembic
 - **Data Processing**: Pandas, NumPy
-- **Stock Data**: yfinance
+- **Market Data**: NSE Bhavcopy CSV ingestion (local PostgreSQL storage)
+- **Task Scheduling**: APScheduler (background jobs)
 - **Async**: httpx, asyncio
 - **Task Queue**: Redpanda (Kafka API compatible)
 

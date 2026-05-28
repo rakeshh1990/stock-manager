@@ -1,39 +1,44 @@
 # ---------------------------------------------------------------------------
-# Curated NSE symbol universe for the stock scanner
-# Updated quarterly to match index reconstitutions
-# All symbols use Yahoo Finance .NS suffix
+# NSE symbol universe — updated May 2026
+#
+# Key corporate actions reflected:
+#   TATAMOTORS demerged Oct 2025 → TMPV (passenger) + TMCV (commercial)
+#   LTIM renamed to LTM (Feb 2026) after LTIMindtree → LTM Limited
+#   INFOSYS trades as INFY on NSE Bhavcopy
+#
+# All symbols are bare NSE tickers as they appear in Bhavcopy CSV (no .NS suffix).
+# The scanner strips .NS before querying market-service.
 # ---------------------------------------------------------------------------
 
 NIFTY_50 = [
-    "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "BHARTIARTL.NS", "ICICIBANK.NS",
-    "INFOSYS.NS", "SBIN.NS", "HINDUNILVR.NS", "ITC.NS", "LT.NS",
-    "KOTAKBANK.NS", "AXISBANK.NS", "HCLTECH.NS", "ASIANPAINT.NS", "MARUTI.NS",
-    "SUNPHARMA.NS", "TITAN.NS", "BAJFINANCE.NS", "WIPRO.NS", "ONGC.NS",
-    "NTPC.NS", "POWERGRID.NS", "ULTRACEMCO.NS", "TECHM.NS", "NESTLEIND.NS",
-    "COALINDIA.NS", "M&M.NS", "BAJAJFINSV.NS", "JSWSTEEL.NS", "TATAMOTORS.NS",
-    "ADANIPORTS.NS", "HINDALCO.NS", "GRASIM.NS", "DRREDDY.NS", "DIVISLAB.NS",
-    "CIPLA.NS", "EICHERMOT.NS", "APOLLOHOSP.NS", "TATACONSUM.NS", "HEROMOTOCO.NS",
-    "SBILIFE.NS", "HDFCLIFE.NS", "BPCL.NS", "BRITANNIA.NS", "INDUSINDBK.NS",
-    "BAJAJ-AUTO.NS", "TATASTEEL.NS", "ADANIENT.NS", "LTIM.NS", "SHRIRAMFIN.NS",
+    "RELIANCE",   "TCS",        "HDFCBANK",   "BHARTIARTL", "TMPV",
+    "ICICIBANK",  "INFY",       "SBIN",       "HINDUNILVR", "ITC",
+    "LT",         "KOTAKBANK",  "AXISBANK",   "HCLTECH",    "ASIANPAINT",
+    "MARUTI",     "SUNPHARMA",  "TITAN",      "BAJFINANCE", "WIPRO",
+    "ONGC",       "NTPC",       "POWERGRID",  "ULTRACEMCO", "TECHM",
+    "NESTLEIND",  "COALINDIA",  "M&M",        "BAJAJFINSV", "TMCV",
+    "ADANIPORTS", "HINDALCO",   "GRASIM",     "DRREDDY",    "DIVISLAB",
+    "CIPLA",      "EICHERMOT",  "APOLLOHOSP", "TATACONSUM", "HEROMOTOCO",
+    "SBILIFE",    "HDFCLIFE",   "BPCL",       "BRITANNIA",  "INDUSINDBK",
+    "BAJAJ-AUTO", "TATASTEEL",  "ADANIENT",   "LTM",        "SHRIRAMFIN",
 ]
 
 NIFTY_NEXT_50 = [
-    "SIEMENS.NS", "PIDILITIND.NS", "DMART.NS", "ICICIPRULI.NS", "SBICARD.NS",
-    "GODREJCP.NS", "BERGEPAINT.NS", "TORNTPHARM.NS", "TRENT.NS", "COLPAL.NS",
-    "MUTHOOTFIN.NS", "DABUR.NS", "MARICO.NS", "ICICIGI.NS", "HAVELLS.NS",
-    "INDIGO.NS", "BOSCHLTD.NS", "CHOLAFIN.NS", "LUPIN.NS", "BIOCON.NS",
-    "MOTHERSON.NS", "OFSS.NS", "AMBUJACEM.NS", "NAUKRI.NS", "GUJGASLTD.NS",
-    "SRF.NS", "MCDOWELL-N.NS", "PIIND.NS", "AUROPHARMA.NS", "PGHH.NS",
-    "INDHOTEL.NS", "VOLTAS.NS", "ALKEM.NS", "BANDHANBNK.NS", "PFC.NS",
-    "RECLTD.NS", "ABB.NS", "CONCOR.NS", "PAGEIND.NS", "OBEROIRLTY.NS",
-    "ASTRAL.NS", "PERSISTENT.NS", "COFORGE.NS", "TATACOMM.NS", "BALKRISIND.NS",
-    "FEDERALBNK.NS", "SUNDARMFIN.NS", "ZYDUSLIFE.NS", "ABCAPITAL.NS", "GMRINFRA.NS",
+    "SIEMENS",    "PIDILITIND", "DMART",      "ICICIPRULI", "SBICARD",
+    "GODREJCP",   "BERGEPAINT", "TORNTPHARM", "TRENT",      "COLPAL",
+    "MUTHOOTFIN", "DABUR",      "MARICO",     "ICICIGI",    "HAVELLS",
+    "INDIGO",     "BOSCHLTD",   "CHOLAFIN",   "LUPIN",      "BIOCON",
+    "MOTHERSON",  "OFSS",       "AMBUJACEM",  "NAUKRI",     "GUJGASLTD",
+    "SRF",        "MCDOWELL-N", "PIIND",      "AUROPHARMA", "PGHH",
+    "INDHOTEL",   "VOLTAS",     "ALKEM",      "BANDHANBNK", "PFC",
+    "RECLTD",     "ABB",        "CONCOR",     "PAGEIND",    "OBEROIRLTY",
+    "ASTRAL",     "PERSISTENT", "COFORGE",    "TATACOMM",   "BALKRISIND",
+    "FEDERALBNK", "SUNDARMFIN", "ZYDUSLIFE",  "ABCAPITAL",  "GMRINFRA",
 ]
 
-# Combined universe — used when user selects "Nifty 100"
 NIFTY_100 = NIFTY_50 + NIFTY_NEXT_50
 
 SCAN_SCOPES = {
-    "nifty50":   NIFTY_50,
-    "nifty100":  NIFTY_100,
+    "nifty50":  NIFTY_50,
+    "nifty100": NIFTY_100,
 }

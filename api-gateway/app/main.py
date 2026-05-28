@@ -54,6 +54,8 @@ NOTIFIER_URL = os.getenv("NOTIFIER_URL", "http://notifier-service:8001")
 AUTH_URL     = os.getenv("AUTH_URL",     "http://auth-service:8003")
 USER_URL     = os.getenv("USER_URL",     "http://user-service:8004")
 SCANNER_URL  = os.getenv("SCANNER_URL",  "http://scanner-service:8005")
+MARKET_URL   = os.getenv("MARKET_URL",   "http://market-service:8006")
+MARKET_URL   = os.getenv("MARKET_URL",   "http://market-service:8006")
 
 
 def _auth_headers(user: CurrentUser) -> dict:
@@ -292,6 +294,67 @@ async def market_snapshot(request: Request, symbol: str = "^NSEI", period: str =
     if r.status_code != 200:
         raise HTTPException(status_code=r.status_code, detail="Market data unavailable")
     return r.json()
+
+
+# ---------------------------------------------------------------------------
+# Market routes
+# ---------------------------------------------------------------------------
+
+@app.get("/market/snapshot", tags=["market"])
+@limiter.limit("10/minute")
+async def market_snapshot(request: Request, symbol: str = "^NSEI", period: str = "1y"):
+    """Nifty 50 history for login page — reads from local DB via market-service."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(f"{MARKET_URL}/history/index/nifty50", params={"days": 252}, timeout=15)
+    if r.status_code not in (200,):
+        raise HTTPException(status_code=r.status_code, detail="Market data unavailable")
+    return r.json()
+
+
+@app.get("/market/history/{symbol}", tags=["market"])
+async def market_history(symbol: str, days: int = 130, user: CurrentUser = Depends(get_current_user)):
+    """OHLCV history for a symbol — requires auth."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(f"{MARKET_URL}/history/{symbol}", params={"days": days}, headers=_auth_headers(user), timeout=15)
+    if r.status_code == 404:
+        raise HTTPException(status_code=404, detail=f"No data for {symbol}")
+    return r.json()
+
+
+@app.get("/market/ingest/status", tags=["market"])
+async def ingest_status(user: CurrentUser = Depends(get_current_user)):
+    """Bhavcopy ingestion run history."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(f"{MARKET_URL}/ingest/status", timeout=10)
+    return r.json()
+
+
+@app.post("/market/ingest/manual", tags=["market"])
+async def manual_ingest(trade_date: str = None, user: CurrentUser = Depends(get_current_user)):
+    """Manually trigger Bhavcopy ingestion."""
+    params = {"trade_date": trade_date} if trade_date else {}
+    async with httpx.AsyncClient() as client:
+        r = await client.post(f"{MARKET_URL}/ingest/manual", params=params, timeout=60)
+    return r.json()
+
+
+@app.get("/market/constituents/{index}", tags=["market"])
+async def get_constituents(index: str, user: CurrentUser = Depends(get_current_user)):
+    """Return current NSE index constituents from market-service."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(f"{MARKET_URL}/constituents/{index}", timeout=15)
+    if r.status_code == 400:
+        raise HTTPException(status_code=400, detail=r.json().get("detail"))
+    return r.json()
+
+
+@app.post("/market/constituents/refresh", tags=["market"])
+async def refresh_constituents(user: CurrentUser = Depends(get_current_user)):
+    """Force-refresh the constituents cache in market-service."""
+    async with httpx.AsyncClient() as client:
+        r = await client.post(f"{MARKET_URL}/constituents/refresh", timeout=10)
+    return r.json()
+
 
 @app.get("/scan/stream", tags=["scanner"])
 async def proxy_scan_stream(

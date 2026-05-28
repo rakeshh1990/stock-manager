@@ -75,12 +75,45 @@ def safe_last(ser):
     """Return last value or None"""
     return None if ser is None or ser.empty else float(ser.iloc[-1])
 
+import requests as _requests
+MARKET_SERVICE_URL = os.getenv("MARKET_SERVICE_URL", "http://market-service:8006")
+
 def fetch_history(symbol: str, period: str = "1y", interval: str = "1d"):
-    """Fetch historical price data via yfinance."""
-    # yfinance returns DataFrame with DatetimeIndex
+    """
+    Fetch historical price data — market-service (local Bhavcopy DB) first,
+    yfinance as fallback if market-service has no data yet.
+    Returns a DataFrame with Close, Open, High, Low, Volume columns.
+    """
+    # Strip .NS / .BO suffix — Bhavcopy stores bare NSE symbols
+    nse_symbol = symbol.replace(".NS", "").replace(".BO", "").upper()
+    days = 365 if "1y" in period else 130
+
+    try:
+        r = _requests.get(
+            f"{MARKET_SERVICE_URL}/history/{nse_symbol}",
+            params={"days": days},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if len(data) >= 30:
+                df = pd.DataFrame(data)
+                df.index = pd.to_datetime(df["date"])
+                df = df.rename(columns={
+                    "close": "Close", "open": "Open",
+                    "high": "High", "low": "Low", "volume": "Volume"
+                })
+                df = df.sort_index()
+                logger.info(f"Fetched {len(df)} rows for {nse_symbol} from market-service")
+                return df
+    except Exception as e:
+        logger.warning(f"market-service fetch failed for {nse_symbol}: {e} — falling back to yfinance")
+
+    # Fallback to yfinance
+    logger.info(f"Fetching {symbol} from yfinance (fallback)")
     df = yf.download(symbol, period=period, interval=interval, progress=False, auto_adjust=True)
     if df is None or df.empty:
-        raise ValueError("No data returned from yfinance for symbol: " + symbol)
+        raise ValueError("No data returned for symbol: " + symbol)
     return df
 
 def compute_indicators(df: pd.DataFrame):

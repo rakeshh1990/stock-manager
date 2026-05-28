@@ -101,8 +101,11 @@ services:
     env_file: .env
     environment:
       SERVICE_PORT: 8002
+      MARKET_SERVICE_URL: http://market-service:8006
     expose:
       - "8002"
+    depends_on:
+      - market-service
     labels:
       - "traefik.enable=false"
     networks:
@@ -121,6 +124,24 @@ services:
     networks:
       - stock-network
 
+
+  # Market Service — Bhavcopy ingestion + price history API
+  market-service:
+    build: ./backend/market-service
+    env_file: .env
+    environment:
+      DB_NAME: market_db
+      SERVICE_PORT: 8006
+    expose:
+      - "8006"
+    networks:
+      - stock-network
+    depends_on:
+      - db
+    labels:
+      - "traefik.enable=false"
+    restart: unless-stopped
+
   # Scanner Service
   scanner-service:
     build: ./backend/scanner-service
@@ -130,6 +151,7 @@ services:
       DB_NAME: scanner_db
       SERVICE_PORT: 8005
       USER_SERVICE_URL: http://user-service:8004
+      MARKET_SERVICE_URL: http://market-service:8006
     expose:
       - "8005"
     networks:
@@ -137,6 +159,7 @@ services:
     depends_on:
       - db
       - user-service
+      - market-service
     labels:
       - "traefik.enable=false"
     restart: unless-stopped
