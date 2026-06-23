@@ -318,6 +318,7 @@ export default function ScanPage() {
   const [scope, setScope]           = useState("nifty50");
   const [selected, setSelected]     = useState(null);   // for detail drawer
   const [lastScan, setLastScan]     = useState(null);
+  const [schedule, setSchedule]     = useState(null);
   const esRef = useRef(null);
 
   // Load last scan results on mount
@@ -332,6 +333,10 @@ export default function ScanPage() {
           setLastScan(data.scanned_at);
         }
       })
+      .catch(() => {});
+    fetch("/api/scan/scheduled/status", { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.ok ? r.json() : null)
+      .then(setSchedule)
       .catch(() => {});
   }, []);
 
@@ -407,6 +412,15 @@ export default function ScanPage() {
   return (
     <div style={{ maxWidth: 960 }}>
       {/* Toolbar */}
+      {schedule?.enabled && (
+        <div style={{ marginBottom: 12, fontSize: 11, color: "var(--text-muted)" }}>
+          Automatic alert scan:{" "}
+          <strong style={{ color: "var(--text-secondary)" }}>
+            {schedule.next_run_at ? new Date(schedule.next_run_at).toLocaleString("en-IN") : "starting"}
+          </strong>
+          {schedule.last_run?.status && ` · Last run ${schedule.last_run.status}`}
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {/* Scope selector */}

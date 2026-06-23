@@ -1,20 +1,17 @@
-version: "3.9"
-
 services:
   # Traefik edge/router - Handles all incoming traffic and routes it based on labels
   edge:
     image: traefik:v3.0
     command:
-      - "--api.dashboard=true"
-      - "--providers.docker=true"
-      - "--entrypoints.web.address=:80"
+      - "--configFile=/etc/traefik/traefik.yaml"
     ports:
-      - "80:80"       # The main entrypoint for the application
-      - "8080:8080"   # Traefik dashboard
+      - "80:80"
+      - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./edge/traefik.yaml:/etc/traefik/traefik.yaml:ro
     networks:
-      - stock-network # Connect to the application network
+      - stock-network
 
   # PostgreSQL Database - For persistent storage
   db:
@@ -27,6 +24,11 @@ services:
       - db_data:/var/lib/postgresql/data
     networks:
       - stock-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     # ports: # Removed external port mapping for security unless needed for local tooling
     #   - "5432:5432"
 
@@ -40,17 +42,27 @@ services:
       - "9092:9092" # External access for Kafka clients if needed
     networks:
       - stock-network
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   # API Gateway (FastAPI) - Routes and orchestrates microservice calls
   api-gateway:
     build: ./api-gateway
     env_file: .env
     depends_on:
-      - analyzer-service
-      - notifier-service
-      - auth-service
-      - user-service
-      - scanner-service
+      analyzer-service:
+        condition: service_started
+      notifier-service:
+        condition: service_started
+      auth-service:
+        condition: service_started
+      user-service:
+        condition: service_started
+      scanner-service:
+        condition: service_started
     expose:
       - "8000" # Internal port for Traefik access
     labels:
@@ -71,7 +83,8 @@ services:
       SERVICE_PORT: 8003
       DB_NAME: auth_db
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     expose:
       - "8003"
     labels:
@@ -87,7 +100,8 @@ services:
       SERVICE_PORT: 8004
       DB_NAME: user_db
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     expose:
       - "8004"
     labels:
@@ -117,12 +131,21 @@ services:
     env_file: .env
     environment:
       SERVICE_PORT: 8001
+      USER_SERVICE_URL: http://user-service:8004
+      KAFKA_BROKER: redpanda:9092
+      KAFKA_ALERT_TOPIC: ${KAFKA_ALERT_TOPIC}
     expose:
       - "8001"
     labels:
       - "traefik.enable=false"
     networks:
       - stock-network
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+    restart: unless-stopped
 
 
   # Market Service — Bhavcopy ingestion + price history API
@@ -137,7 +160,8 @@ services:
     networks:
       - stock-network
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     labels:
       - "traefik.enable=false"
     restart: unless-stopped
@@ -157,9 +181,14 @@ services:
     networks:
       - stock-network
     depends_on:
-      - db
-      - user-service
-      - market-service
+      db:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+      market-service:
+        condition: service_started
     labels:
       - "traefik.enable=false"
     restart: unless-stopped

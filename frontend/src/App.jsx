@@ -1,9 +1,12 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import LoginPage     from "./pages/LoginPage";
 import AnalysePage   from "./pages/AnalysePage";
+import AlertsPage    from "./pages/AlertsPage";
+import NotificationsPage from "./pages/NotificationsPage";
 import PortfolioPage from "./pages/PortfolioPage";
 import WatchlistPage from "./pages/WatchlistPage";
 import ScanPage      from "./pages/ScanPage";
+import client        from "./api/client";
 
 const NAV = [
   { id: "analyse",   label: "Analyse",
@@ -14,12 +17,31 @@ const NAV = [
     icon: (<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="1.5"/><path d="M5 8h6M5 5.5h6M5 10.5h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>) },
   { id: "portfolio", label: "Portfolio",
     icon: (<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="6" width="12" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.5"/><path d="M5 6V4.5A3 3 0 0111 4.5V6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>) },
+  { id: "alerts", label: "Alerts",
+    icon: (<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2a4 4 0 00-4 4v2.5L2.5 11h11L12 8.5V6a4 4 0 00-4-4z" stroke="currentColor" strokeWidth="1.4"/><path d="M6.5 13a1.7 1.7 0 003 0" stroke="currentColor" strokeWidth="1.4"/></svg>) },
+  { id: "notifications", label: "Notifications",
+    icon: (<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="3" width="12" height="10" rx="2" stroke="currentColor" strokeWidth="1.4"/><path d="M5 6h6M5 9h4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>) },
 ];
 
 export default function App() {
   const [token, setToken] = useState(() => localStorage.getItem("sa_token"));
   const [email, setEmail] = useState(() => localStorage.getItem("sa_email") ?? "");
   const [page, setPage]   = useState("analyse");
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  const refreshUnread = useCallback(() => {
+    if (!token) return;
+    client.get("/notifications/unread-count")
+      .then((response) => setUnreadCount(response.data.count))
+      .catch(() => {});
+  }, [token]);
+
+  useEffect(() => {
+    refreshUnread();
+    const timer = setInterval(refreshUnread, 30000);
+    return () => clearInterval(timer);
+  }, [refreshUnread]);
+
 
   const handleLogin  = (t, e) => { setToken(t); setEmail(e); };
   const handleLogout = () => {
@@ -55,6 +77,11 @@ export default function App() {
                 onMouseLeave={(e)=>{ if(!active){e.currentTarget.style.background="transparent";e.currentTarget.style.color="#8a90ab";}}}
               >
                 {item.icon}{item.label}
+                {item.id === "notifications" && unreadCount > 0 && (
+                  <span style={{ marginLeft:"auto", background:"var(--blue)", color:"#fff", borderRadius:20, padding:"1px 6px", fontSize:9, fontFamily:"var(--mono)" }}>
+                    {unreadCount > 99 ? "99+" : unreadCount}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -74,12 +101,18 @@ export default function App() {
       <main style={{ marginLeft:220, flex:1, minHeight:"100vh", background:"var(--surface-2)" }}>
         <div style={{ height:52, background:"var(--surface)", borderBottom:"1px solid var(--border)", display:"flex", alignItems:"center", padding:"0 32px", position:"sticky", top:0, zIndex:10 }}>
           <h1 style={{ fontFamily:"var(--display)", fontSize:18, fontWeight:600, color:"var(--text-primary)", margin:0 }}>{NAV.find((n)=>n.id===page)?.label}</h1>
+          <button onClick={() => setPage("notifications")} aria-label="Notifications" style={{ marginLeft:"auto", position:"relative", border:"1px solid var(--border)", background:"var(--surface)", borderRadius:8, padding:"7px 9px", cursor:"pointer" }}>
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M8 2a4 4 0 00-4 4v2.5L2.5 11h11L12 8.5V6a4 4 0 00-4-4z" stroke="currentColor" strokeWidth="1.4"/></svg>
+            {unreadCount > 0 && <span style={{ position:"absolute", top:-5, right:-5, minWidth:16, height:16, borderRadius:10, background:"var(--danger)", color:"#fff", fontSize:9, display:"flex", alignItems:"center", justifyContent:"center" }}>{unreadCount > 9 ? "9+" : unreadCount}</span>}
+          </button>
         </div>
         <div style={{ padding:"32px" }}>
           {page==="analyse"   && <AnalysePage />}
           {page==="scan"      && <ScanPage />}
           {page==="watchlist" && <WatchlistPage />}
           {page==="portfolio" && <PortfolioPage />}
+          {page==="alerts"    && <AlertsPage />}
+          {page==="notifications" && <NotificationsPage onChanged={refreshUnread} />}
         </div>
       </main>
     </div>

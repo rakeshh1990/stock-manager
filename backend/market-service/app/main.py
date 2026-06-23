@@ -6,6 +6,7 @@ import zipfile
 import requests
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
+import threading
 
 import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -165,12 +166,24 @@ def ingest_bhavcopy(trade_date: date) -> dict:
     try:
         # Check if already ingested
         existing = db.execute(
-            text("SELECT id FROM bhavcopy_runs WHERE trade_date = :d AND status = 'success'"),
+            text("""
+                SELECT status
+                FROM bhavcopy_runs
+                WHERE trade_date = :d
+            """),
             {"d": trade_date}
         ).fetchone()
+
+
         if existing:
-            logger.info(f"Bhavcopy for {trade_date} already ingested — skipping")
-            return {"status": "skipped", "trade_date": str(trade_date)}
+            logger.info(
+                f"Bhavcopy for {trade_date} already processed ({existing[0]}) - skipping"
+            )
+
+            return {
+                "status": "skipped",
+                "trade_date": str(trade_date)
+            }
 
         raw_df = _fetch_bhavcopy(trade_date)
         if raw_df is None:
@@ -221,19 +234,21 @@ def ingest_bhavcopy(trade_date: date) -> dict:
         return {"status": "success", "trade_date": str(trade_date), "rows": inserted}
 
     except Exception as e:
-        db.add(BhavCopyRun(trade_date=trade_date, status="failed", error=str(e)[:500]))
-        db.commit()
-        logger.error(f"Bhavcopy ingestion failed for {trade_date}: {e}")
+        db.rollback()
+        logger.exception(e)
         return {"status": "failed", "trade_date": str(trade_date), "error": str(e)}
     finally:
         db.close()
 
 
 def _scheduled_ingest():
-    """Runs daily at 4:15 PM IST — ingests today's Bhavcopy."""
-    logger.info("Scheduled Bhavcopy ingestion starting...")
-    result = ingest_bhavcopy(date.today())
-    logger.info(f"Scheduled ingestion result: {result}")
+
+    logger.info("Scheduled reconciliation started")
+
+    for d in _trading_days_back(90):
+        ingest_bhavcopy(d)
+
+    logger.info("Scheduled reconciliation completed")
 
 
 # ---------------------------------------------------------------------------
@@ -241,29 +256,32 @@ def _scheduled_ingest():
 # ---------------------------------------------------------------------------
 @app.on_event("startup")
 def startup():
-    # Backfill last 5 trading days on first run to seed the DB
-    logger.info("Market service starting — checking for missing Bhavcopy data...")
-    db = SessionLocal()
-    try:
-        count = db.execute(text("SELECT COUNT(*) FROM price_history")).scalar()
-        db.close()
-        if count == 0:
-            logger.info("price_history is empty — backfilling last 90 trading days (needed for indicators)")
-            for d in _trading_days_back(90):
-                ingest_bhavcopy(d)
-        else:
-            logger.info(f"price_history has {count} rows — checking yesterday only")
-            yesterday = date.today() - timedelta(days=1)
-            if yesterday.weekday() < 5:
-                ingest_bhavcopy(yesterday)
-    except Exception as e:
-        logger.error(f"Startup backfill failed: {e}")
 
-    # Schedule daily 4:15 PM IST (10:45 UTC)
-    scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
-    scheduler.add_job(_scheduled_ingest, CronTrigger(hour=16, minute=15))
+    def reconcile():
+        logger.info("Reconciling last 90 days")
+
+        for d in _trading_days_back(90):
+            ingest_bhavcopy(d)
+
+        logger.info("Reconciliation completed")
+
+
+    threading.Thread(
+        target=reconcile,
+        daemon=True
+    ).start()
+
+
+    scheduler = BackgroundScheduler(
+        timezone="Asia/Kolkata"
+    )
+
+    scheduler.add_job(
+        _scheduled_ingest,
+        CronTrigger(hour=16, minute=15)
+    )
+
     scheduler.start()
-    logger.info("Bhavcopy scheduler started — daily at 4:15 PM IST")
 
 
 # ---------------------------------------------------------------------------

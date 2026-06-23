@@ -58,3 +58,46 @@ class WatchlistItem(Base):
     __table_args__ = (
         UniqueConstraint("watchlist_id", "symbol", name="uq_watchlist_item_symbol"),
     )
+
+class Alert(Base):
+    """
+    User-defined alert on a stock symbol.
+    alert_type: 'condition' (user-created) | 'exit_watch' (auto for portfolio holdings)
+    condition_type: RSI_BELOW | RSI_ABOVE | PRICE_BELOW | PRICE_ABOVE |
+                    MOMENTUM_NEG | SCORE_DROP | EXIT_SIGNAL
+    """
+    __tablename__ = "alerts"
+
+    id             = Column(Integer, primary_key=True)
+    user_id        = Column(Integer, nullable=False, index=True)
+    symbol         = Column(String(20), nullable=False)
+    alert_type     = Column(String(20), nullable=False, default="condition")
+    condition_type = Column(String(20), nullable=False)
+    threshold      = Column(Numeric(12, 2), nullable=True)
+    active         = Column(String(1), nullable=False, default="Y")  # Y | N
+    cooldown_hours = Column(Integer, default=24)
+    created_at     = Column(DateTime(timezone=True), server_default=func.now())
+    last_fired_at  = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_alerts_user_id", "user_id"),
+    )
+
+
+class AlertHistory(Base):
+    """Immutable record of every fired alert — drives the in-app notification feed."""
+    __tablename__ = "alert_history"
+
+    id              = Column(Integer, primary_key=True)
+    event_id        = Column(String(36), nullable=True, unique=True, index=True)
+    alert_id        = Column(Integer, ForeignKey("alerts.id", ondelete="SET NULL"), nullable=True)
+    user_id         = Column(Integer, nullable=False, index=True)
+    symbol          = Column(String(20), nullable=False)
+    alert_type      = Column(String(20), nullable=False)
+    condition_type  = Column(String(20), nullable=False)
+    triggered_value = Column(Numeric(12, 4), nullable=True)
+    threshold       = Column(Numeric(12, 2), nullable=True)
+    message         = Column(String(500), nullable=False)
+    priority        = Column(String(10), nullable=False, default="normal")  # normal | high
+    read            = Column(String(1), nullable=False, default="N")
+    fired_at        = Column(DateTime(timezone=True), server_default=func.now())

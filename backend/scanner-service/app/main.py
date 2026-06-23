@@ -10,8 +10,10 @@ from typing import Optional, List
 
 import httpx
 import pandas as pd
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from kafka import KafkaProducer
 from sqlalchemy import text
 
 from .database import SessionLocal
@@ -31,6 +33,14 @@ logger = logging.getLogger("scanner-service")
 # ---------------------------------------------------------------------------
 USER_SERVICE_URL   = os.getenv("USER_SERVICE_URL",   "http://user-service:8004")
 MARKET_SERVICE_URL = os.getenv("MARKET_SERVICE_URL", "http://market-service:8006")
+KAFKA_BROKER       = os.getenv("KAFKA_BROKER", "redpanda:9092")
+KAFKA_TOPIC        = os.getenv("KAFKA_ALERT_TOPIC", "alert.triggered")
+INTERNAL_API_KEY   = os.getenv("INTERNAL_API_KEY", "development-internal-key")
+SCAN_SCHEDULE_ENABLED = os.getenv("SCAN_SCHEDULE_ENABLED", "true").lower() == "true"
+SCAN_SCHEDULE_HOUR = int(os.getenv("SCAN_SCHEDULE_HOUR", "18"))
+SCAN_SCHEDULE_MINUTE = int(os.getenv("SCAN_SCHEDULE_MINUTE", "0"))
+SCAN_SCHEDULE_TIMEZONE = os.getenv("SCAN_SCHEDULE_TIMEZONE", "Asia/Kolkata")
+SCAN_SCHEDULE_SCOPE = os.getenv("SCAN_SCHEDULE_SCOPE", "nifty100")
 
 # ---------------------------------------------------------------------------
 # Symbol resolution — fetched from market-service, not hardcoded
@@ -79,7 +89,9 @@ def _get_symbols(scope: str) -> list:
 
 app = FastAPI(title="Scanner Service", version="2.0.0")
 _executor = ThreadPoolExecutor(max_workers=8)
-
+_scheduler = BackgroundScheduler(timezone=SCAN_SCHEDULE_TIMEZONE)
+_producer: Optional[KafkaProducer] = None
+_last_scheduled_run: dict = {}
 
 # ---------------------------------------------------------------------------
 # Auth helper
@@ -358,6 +370,186 @@ def get_latest_results(x_user_id: Optional[str] = Header(default=None)):
     finally:
         db.close()
 
+
+
+def _cooldown_elapsed(alert: dict) -> bool:
+    last_fired = alert.get("last_fired_at")
+    if not last_fired:
+        return True
+    try:
+        fired_at = datetime.fromisoformat(last_fired.replace("Z", "+00:00"))
+        hours = max(int(alert.get("cooldown_hours") or 0), 0)
+        return (datetime.now(timezone.utc) - fired_at).total_seconds() >= hours * 3600
+    except (TypeError, ValueError):
+        return True
+
+
+def _match_alert(alert: dict, result: dict) -> tuple[bool, Optional[float]]:
+    condition = alert["condition_type"]
+    threshold = float(alert["threshold"]) if alert.get("threshold") is not None else None
+
+    if condition == "RSI_BELOW":
+        value = result.get("rsi")
+        return threshold is not None and value is not None and value < threshold, value
+    if condition == "RSI_ABOVE":
+        value = result.get("rsi")
+        return threshold is not None and value is not None and value > threshold, value
+    if condition == "PRICE_BELOW":
+        value = result.get("latest_close")
+        return threshold is not None and value is not None and value < threshold, value
+    if condition == "PRICE_ABOVE":
+        value = result.get("latest_close")
+        return threshold is not None and value is not None and value > threshold, value
+    if condition == "MOMENTUM_NEG":
+        value = result.get("momentum_5d")
+        boundary = -abs(threshold or 0)
+        return value is not None and value < boundary, value
+    if condition == "SCORE_DROP":
+        value = result.get("score")
+        return threshold is not None and value is not None and value <= threshold, value
+    if condition == "EXIT_SIGNAL":
+        value = result.get("score")
+        return result.get("recommendation") == "SELL", value
+    return False, None
+
+
+def _alert_message(alert: dict, result: dict, value: Optional[float]) -> str:
+    labels = {
+        "RSI_BELOW": "RSI fell below",
+        "RSI_ABOVE": "RSI rose above",
+        "PRICE_BELOW": "price fell below",
+        "PRICE_ABOVE": "price rose above",
+        "MOMENTUM_NEG": "5-day momentum turned negative at",
+        "SCORE_DROP": "scanner score dropped to",
+        "EXIT_SIGNAL": "scanner generated an exit signal with score",
+    }
+    threshold = alert.get("threshold")
+    condition = alert["condition_type"]
+    target = threshold if condition not in {"MOMENTUM_NEG", "EXIT_SIGNAL"} else value
+    return f"{alert['symbol']}: {labels.get(condition, condition)} {target}."
+
+
+def run_scheduled_alert_scan() -> dict:
+    global _last_scheduled_run
+    started_at = datetime.now(timezone.utc)
+    summary = {
+        "started_at": started_at.isoformat(),
+        "scope": SCAN_SCHEDULE_SCOPE,
+        "symbols": 0,
+        "alerts_checked": 0,
+        "events_published": 0,
+        "status": "running",
+    }
+    _last_scheduled_run = summary
+
+    try:
+        response = httpx.get(
+            f"{USER_SERVICE_URL}/internal/alerts/active",
+            headers={"X-Internal-Key": INTERNAL_API_KEY},
+            timeout=15,
+        )
+        response.raise_for_status()
+        alerts = [a for a in response.json() if _cooldown_elapsed(a)]
+        alerts_by_symbol: dict[str, list[dict]] = {}
+        for alert in alerts:
+            symbol = alert["symbol"].replace(".NS", "").replace(".BO", "").upper()
+            alerts_by_symbol.setdefault(symbol, []).append(alert)
+
+        index_symbols = {
+            symbol.replace(".NS", "").replace(".BO", "").upper(): symbol
+            for symbol in _get_symbols(SCAN_SCHEDULE_SCOPE)
+        }
+        symbols = [index_symbols[key] for key in sorted(set(index_symbols) & set(alerts_by_symbol))]
+        summary["symbols"] = len(symbols)
+        producer = _get_producer()
+
+        for symbol in symbols:
+            result = _analyse_symbol(symbol)
+            if result.get("error"):
+                continue
+            normalized_symbol = symbol.replace(".NS", "").replace(".BO", "").upper()
+            for alert in alerts_by_symbol[normalized_symbol]:
+                summary["alerts_checked"] += 1
+                matched, value = _match_alert(alert, result)
+                if not matched:
+                    continue
+                event = {
+                    "event_id": str(uuid.uuid4()),
+                    "event_type": "alert.triggered",
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                    "alert_id": alert["id"],
+                    "user_id": alert["user_id"],
+                    "symbol": alert["symbol"],
+                    "alert_type": alert["alert_type"],
+                    "condition_type": alert["condition_type"],
+                    "threshold": alert.get("threshold"),
+                    "triggered_value": value,
+                    "priority": "high" if alert["condition_type"] == "EXIT_SIGNAL" else "normal",
+                    "message": _alert_message(alert, result, value),
+                    "scan": result,
+                }
+                producer.send(KAFKA_TOPIC, key=str(alert["id"]).encode("utf-8"), value=event)
+                summary["events_published"] += 1
+        producer.flush(timeout=10)
+        summary["status"] = "completed"
+    except Exception as exc:
+        logger.exception("Scheduled alert scan failed")
+        summary["status"] = "failed"
+        summary["error"] = str(exc)
+
+    summary["finished_at"] = datetime.now(timezone.utc).isoformat()
+    _last_scheduled_run = summary
+    return summary
+
+
+@app.on_event("startup")
+def start_scheduler():
+    if SCAN_SCHEDULE_ENABLED and not _scheduler.running:
+        _scheduler.add_job(
+            run_scheduled_alert_scan,
+            trigger="cron",
+            hour=SCAN_SCHEDULE_HOUR,
+            minute=SCAN_SCHEDULE_MINUTE,
+            id="scheduled-alert-scan",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        _scheduler.start()
+        logger.info(
+            "Scheduled alert scan enabled at %02d:%02d %s",
+            SCAN_SCHEDULE_HOUR,
+            SCAN_SCHEDULE_MINUTE,
+            SCAN_SCHEDULE_TIMEZONE,
+        )
+
+
+@app.on_event("shutdown")
+def stop_scheduler():
+    if _scheduler.running:
+        _scheduler.shutdown(wait=False)
+    if _producer is not None:
+        _producer.close(timeout=5)
+
+
+@app.post("/scan/scheduled/run", tags=["scanner"])
+def trigger_scheduled_scan(x_internal_key: Optional[str] = Header(default=None)):
+    if x_internal_key != INTERNAL_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid internal service key")
+    return run_scheduled_alert_scan()
+
+
+@app.get("/scan/scheduled/status", tags=["scanner"])
+def scheduled_scan_status():
+    next_run = None
+    job = _scheduler.get_job("scheduled-alert-scan") if _scheduler.running else None
+    if job and job.next_run_time:
+        next_run = job.next_run_time.isoformat()
+    return {
+        "enabled": SCAN_SCHEDULE_ENABLED,
+        "next_run_at": next_run,
+        "last_run": _last_scheduled_run or None,
+    }
 
 @app.get("/health", tags=["ops"])
 def health():

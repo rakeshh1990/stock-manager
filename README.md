@@ -10,9 +10,9 @@ A comprehensive stock market scanning and alerting platform with real-time techn
 - **scanner-service**: FastAPI - Real-time stock scanning with technical analysis
 - **market-service**: FastAPI + PostgreSQL - Bhavcopy ingestion & price history API ⭐ **NEW**
 - **auth-service**: FastAPI + PostgreSQL + Alembic - User authentication & JWT
-- **user-service**: FastAPI + PostgreSQL + Alembic - Portfolios & watchlists
+- **user-service**: FastAPI + PostgreSQL + Alembic - Portfolios, watchlists, alerts & notification history
 - **analyzer-service**: FastAPI - Stock analysis with market-service integration
-- **notifier-service**: FastAPI (placeholder) - Alert notifications
+- **notifier-service**: FastAPI + Kafka consumer - Durable in-app alert notifications
 - **db**: PostgreSQL - Persistent data storage (multi-database per service)
 - **redpanda**: Kafka broker - Async message queue for inter-service communication
 - **frontend**: React + Vite + Tailwind CSS - Modern responsive UI
@@ -288,8 +288,9 @@ curl -H "Authorization: Bearer $TOKEN" \
    - Data freshness depends on daily ingestion schedule
    - Future: Scheduled background jobs for automated daily ingestion
 
-3. **Placeholder Services**
-   - Notifier Service: Ready for Kafka-driven alerts
+3. **Notification Channels**
+   - In-app notifications are implemented through Redpanda/Kafka
+   - Email and push delivery remain optional future channels
 
 ### Planned Enhancements
 - [ ] Scheduled background jobs for daily Bhavcopy ingestion (APScheduler integration)

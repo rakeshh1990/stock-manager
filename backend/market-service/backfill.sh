@@ -8,6 +8,7 @@
 #   MA50     needs 50+ days  ← this is why 4 days produces no results
 #   MA200    needs 200 days  (optional, enhances scoring)
 #
+# curl -s -X POST http://localhost/api/auth/login   -H "Content-Type: application/json"   -d '{"email":"rakeshh1990@gmail.com","password":"Password"}'   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])"
 # Usage:
 #   chmod +x backfill.sh
 #   ./backfill.sh YOUR_JWT_TOKEN

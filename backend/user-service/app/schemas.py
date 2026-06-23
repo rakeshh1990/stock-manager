@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Literal, Optional
 from decimal import Decimal
 from datetime import datetime
 
@@ -65,3 +65,57 @@ class WatchlistSummary(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+ConditionType = Literal[
+    "RSI_BELOW", "RSI_ABOVE", "PRICE_BELOW", "PRICE_ABOVE",
+    "MOMENTUM_NEG", "SCORE_DROP", "EXIT_SIGNAL",
+]
+
+
+class AlertCreate(BaseModel):
+    symbol: str = Field(..., min_length=1, max_length=20, examples=["INFY"])
+    alert_type: Literal["condition", "exit_watch"] = "condition"
+    condition_type: ConditionType
+    threshold: Optional[Decimal] = None
+    cooldown_hours: int = Field(default=24, ge=0, le=720)
+
+
+class AlertOut(BaseModel):
+    id: int
+    user_id: int
+    symbol: str
+    alert_type: str
+    condition_type: str
+    threshold: Optional[Decimal]
+    active: str
+    cooldown_hours: int
+    created_at: datetime
+    last_fired_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True
+
+
+class NotificationOut(BaseModel):
+    id: int
+    alert_id: Optional[int]
+    user_id: int
+    symbol: str
+    alert_type: str
+    condition_type: str
+    triggered_value: Optional[Decimal]
+    threshold: Optional[Decimal]
+    message: str
+    priority: str
+    read: str
+    fired_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AlertFiredIn(BaseModel):
+    triggered_value: Optional[Decimal] = None
+    message: str = Field(..., min_length=1, max_length=500)
+    priority: Literal["normal", "high"] = "normal"

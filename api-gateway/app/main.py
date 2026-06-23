@@ -54,8 +54,6 @@ NOTIFIER_URL = os.getenv("NOTIFIER_URL", "http://notifier-service:8001")
 AUTH_URL     = os.getenv("AUTH_URL",     "http://auth-service:8003")
 USER_URL     = os.getenv("USER_URL",     "http://user-service:8004")
 SCANNER_URL  = os.getenv("SCANNER_URL",  "http://scanner-service:8005")
-MARKET_URL   = os.getenv("MARKET_URL",   "http://market-service:8006")
-MARKET_URL   = os.getenv("MARKET_URL",   "http://market-service:8006")
 
 
 def _auth_headers(user: CurrentUser) -> dict:
@@ -295,67 +293,6 @@ async def market_snapshot(request: Request, symbol: str = "^NSEI", period: str =
         raise HTTPException(status_code=r.status_code, detail="Market data unavailable")
     return r.json()
 
-
-# ---------------------------------------------------------------------------
-# Market routes
-# ---------------------------------------------------------------------------
-
-@app.get("/market/snapshot", tags=["market"])
-@limiter.limit("10/minute")
-async def market_snapshot(request: Request, symbol: str = "^NSEI", period: str = "1y"):
-    """Nifty 50 history for login page — reads from local DB via market-service."""
-    async with httpx.AsyncClient() as client:
-        r = await client.get(f"{MARKET_URL}/history/index/nifty50", params={"days": 252}, timeout=15)
-    if r.status_code not in (200,):
-        raise HTTPException(status_code=r.status_code, detail="Market data unavailable")
-    return r.json()
-
-
-@app.get("/market/history/{symbol}", tags=["market"])
-async def market_history(symbol: str, days: int = 130, user: CurrentUser = Depends(get_current_user)):
-    """OHLCV history for a symbol — requires auth."""
-    async with httpx.AsyncClient() as client:
-        r = await client.get(f"{MARKET_URL}/history/{symbol}", params={"days": days}, headers=_auth_headers(user), timeout=15)
-    if r.status_code == 404:
-        raise HTTPException(status_code=404, detail=f"No data for {symbol}")
-    return r.json()
-
-
-@app.get("/market/ingest/status", tags=["market"])
-async def ingest_status(user: CurrentUser = Depends(get_current_user)):
-    """Bhavcopy ingestion run history."""
-    async with httpx.AsyncClient() as client:
-        r = await client.get(f"{MARKET_URL}/ingest/status", timeout=10)
-    return r.json()
-
-
-@app.post("/market/ingest/manual", tags=["market"])
-async def manual_ingest(trade_date: str = None, user: CurrentUser = Depends(get_current_user)):
-    """Manually trigger Bhavcopy ingestion."""
-    params = {"trade_date": trade_date} if trade_date else {}
-    async with httpx.AsyncClient() as client:
-        r = await client.post(f"{MARKET_URL}/ingest/manual", params=params, timeout=60)
-    return r.json()
-
-
-@app.get("/market/constituents/{index}", tags=["market"])
-async def get_constituents(index: str, user: CurrentUser = Depends(get_current_user)):
-    """Return current NSE index constituents from market-service."""
-    async with httpx.AsyncClient() as client:
-        r = await client.get(f"{MARKET_URL}/constituents/{index}", timeout=15)
-    if r.status_code == 400:
-        raise HTTPException(status_code=400, detail=r.json().get("detail"))
-    return r.json()
-
-
-@app.post("/market/constituents/refresh", tags=["market"])
-async def refresh_constituents(user: CurrentUser = Depends(get_current_user)):
-    """Force-refresh the constituents cache in market-service."""
-    async with httpx.AsyncClient() as client:
-        r = await client.post(f"{MARKET_URL}/constituents/refresh", timeout=10)
-    return r.json()
-
-
 @app.get("/scan/stream", tags=["scanner"])
 async def proxy_scan_stream(
     scope: str = "nifty50",
@@ -393,5 +330,117 @@ async def proxy_scan_results(user: CurrentUser = Depends(get_current_user)):
             f"{SCANNER_URL}/scan/results",
             headers=_auth_headers(user),
             timeout=15,
+        )
+    return r.json()
+
+@app.get("/scan/scheduled/status", tags=["scanner"])
+async def proxy_scheduled_scan_status(user: CurrentUser = Depends(get_current_user)):
+    """Return scheduler configuration and the most recent scheduled run."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(f"{SCANNER_URL}/scan/scheduled/status", timeout=15)
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail="Scanner scheduler unavailable")
+    return r.json()
+
+# ---------------------------------------------------------------------------
+# Alerts — proxy to user-service (Phase 3, Stage 1)
+# ---------------------------------------------------------------------------
+
+@app.get("/alerts", tags=["alerts"])
+async def list_alerts(user: CurrentUser = Depends(get_current_user)):
+    """List all alerts for the authenticated user."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{USER_URL}/alerts",
+            headers=_auth_headers(user), timeout=15,
+        )
+    return r.json()
+
+
+@app.post("/alerts", tags=["alerts"], status_code=201)
+async def create_alert(payload: dict, user: CurrentUser = Depends(get_current_user)):
+    """Create a new condition alert."""
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{USER_URL}/alerts",
+            json=payload, headers=_auth_headers(user), timeout=15,
+        )
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.json().get("detail"))
+    return r.json()
+
+
+@app.patch("/alerts/{alert_id}/toggle", tags=["alerts"])
+async def toggle_alert(alert_id: int, user: CurrentUser = Depends(get_current_user)):
+    """Toggle alert active/inactive."""
+    async with httpx.AsyncClient() as client:
+        r = await client.patch(
+            f"{USER_URL}/alerts/{alert_id}/toggle",
+            headers=_auth_headers(user), timeout=15,
+        )
+    if r.status_code == 404:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return r.json()
+
+
+@app.delete("/alerts/{alert_id}", tags=["alerts"], status_code=204)
+async def delete_alert(alert_id: int, user: CurrentUser = Depends(get_current_user)):
+    """Delete an alert."""
+    async with httpx.AsyncClient() as client:
+        await client.delete(
+            f"{USER_URL}/alerts/{alert_id}",
+            headers=_auth_headers(user), timeout=15,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Notifications — proxy to user-service (Phase 3, Stage 1)
+# ---------------------------------------------------------------------------
+
+@app.get("/notifications", tags=["notifications"])
+async def list_notifications(
+    limit: int = 50,
+    unread: bool = False,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Return alert history for the in-app notification feed."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{USER_URL}/notifications",
+            params={"limit": limit, "unread": unread},
+            headers=_auth_headers(user), timeout=15,
+        )
+    return r.json()
+
+
+@app.get("/notifications/unread-count", tags=["notifications"])
+async def unread_count(user: CurrentUser = Depends(get_current_user)):
+    """Return unread notification count — used by the bell icon."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{USER_URL}/notifications/unread-count",
+            headers=_auth_headers(user), timeout=15,
+        )
+    return r.json()
+
+
+@app.patch("/notifications/{notif_id}/read", tags=["notifications"])
+async def mark_read(notif_id: int, user: CurrentUser = Depends(get_current_user)):
+    """Mark a single notification as read."""
+    async with httpx.AsyncClient() as client:
+        r = await client.patch(
+            f"{USER_URL}/notifications/{notif_id}/read",
+            headers=_auth_headers(user), timeout=15,
+        )
+    return r.json()
+
+
+@app.patch("/notifications/read-all", tags=["notifications"])
+async def mark_all_read(user: CurrentUser = Depends(get_current_user)):
+    """Mark all notifications as read."""
+    async with httpx.AsyncClient() as client:
+        r = await client.patch(
+            f"{USER_URL}/notifications/read-all",
+            headers=_auth_headers(user), timeout=15,
         )
     return r.json()
