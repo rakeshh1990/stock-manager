@@ -5,10 +5,13 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
 
   frontend:
-
     uses: ./.github/workflows/reusable-build.yaml
 
     with:
