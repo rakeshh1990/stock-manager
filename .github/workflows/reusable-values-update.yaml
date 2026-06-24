@@ -1,0 +1,57 @@
+name: Reusable GitOps Update
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        required: true
+        type: string
+      values_file:
+        required: true
+        type: string
+      image_repository:
+        required: true
+        type: string
+      image_tag:
+        required: true
+        type: string
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout GitOps
+        uses: actions/checkout@v4
+        with:
+          repository: rakeshh1990/my-gitops
+          token: ${{ secrets.GITOPS_TOKEN }}
+          path: gitops
+
+      - name: Setup yq
+        uses: mikefarah/yq@v4.45.1
+
+      - name: Update values
+        run: |
+          cd gitops
+
+          yq -i '.workload.image.repository="${{ inputs.image_repository }}"' '${{ inputs.values_file }}'
+          yq -i '.workload.image.tag="${{ inputs.image_tag }}"' '${{ inputs.values_file }}'
+
+          echo "Updated file:"
+          cat '${{ inputs.values_file }}'
+
+      - name: Create PR
+        id: pr
+        uses: peter-evans/create-pull-request@v7
+        with:
+          path: gitops
+          token: ${{ secrets.GITOPS_TOKEN }}
+          commit-message: "chore: update ${{ inputs.service }}"
+          title: "🚀 Update ${{ inputs.service }}"
+          body: |
+            Service: ${{ inputs.service }}
+            Tag: ${{ inputs.image_tag }}
+
+          branch: ci/${{ inputs.service }}-${{ inputs.image_tag }}
+          delete-branch: true
