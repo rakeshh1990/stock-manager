@@ -1,10 +1,220 @@
 services:
-  stock-alert:
-    build: .
-    container_name: stock_alert
+  # Traefik edge/router - Handles all incoming traffic and routes it based on labels
+  edge:
+    image: traefik:v3.0
+    command:
+      - "--configFile=/etc/traefik/traefik.yaml"
+    ports:
+      - "80:80"
+      - "8080:8080"
     volumes:
-      - .:/app
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./edge/traefik.yaml:/etc/traefik/traefik.yaml:ro
+    networks:
+      - stock-network
+
+  # PostgreSQL Database - For persistent storage
+  db:
+    image: postgres:15
     environment:
-      - TZ=Asia/Kolkata
-    env_file:
-      - .env
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - stock-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # ports: # Removed external port mapping for security unless needed for local tooling
+    #   - "5432:5432"
+
+  # Redpanda Kafka - For asynchronous communication (e.g., Notifier Service)
+  redpanda:
+    image: redpandadata/redpanda:latest
+    command: >
+      redpanda start --overprovisioned --smp 1 --memory 512M --reserve-memory 0M
+      --node-id 0 --check=false --kafka-addr 0.0.0.0:9092 --advertise-kafka-addr redpanda:9092
+    ports:
+      - "9092:9092" # External access for Kafka clients if needed
+    networks:
+      - stock-network
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # API Gateway (FastAPI) - Routes and orchestrates microservice calls
+  api-gateway:
+    build: ./api-gateway
+    env_file: .env
+    depends_on:
+      analyzer-service:
+        condition: service_started
+      notifier-service:
+        condition: service_started
+      auth-service:
+        condition: service_started
+      user-service:
+        condition: service_started
+      scanner-service:
+        condition: service_started
+    expose:
+      - "8000" # Internal port for Traefik access
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gateway.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.gateway.entrypoints=web"
+      - "traefik.http.services.gateway.loadbalancer.server.port=8000"
+      - "traefik.http.middlewares.strip-api.stripPrefix.prefixes=/api"
+      - "traefik.http.routers.gateway.middlewares=strip-api@docker"
+    networks:
+      - stock-network
+
+  # Auth Service
+  auth-service:
+    build: ./backend/auth-service
+    env_file: .env
+    environment:
+      SERVICE_PORT: 8003
+      DB_NAME: auth_db
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "8003"
+    labels:
+      - "traefik.enable=false" # Traefik should not expose backend services directly
+    networks:
+      - stock-network
+
+  # User Service
+  user-service:
+    build: ./backend/user-service
+    env_file: .env
+    environment:
+      SERVICE_PORT: 8004
+      DB_NAME: user_db
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "8004"
+    labels:
+      - "traefik.enable=false"
+    networks:
+      - stock-network
+
+  # Analyzer Service
+  analyzer-service:
+    build: ./backend/analyzer-service
+    env_file: .env
+    environment:
+      SERVICE_PORT: 8002
+      MARKET_SERVICE_URL: http://market-service:8006
+    expose:
+      - "8002"
+    depends_on:
+      - market-service
+    labels:
+      - "traefik.enable=false"
+    networks:
+      - stock-network
+
+  # Notifier Service
+  notifier-service:
+    build: ./backend/notifier-service
+    env_file: .env
+    environment:
+      SERVICE_PORT: 8001
+      USER_SERVICE_URL: http://user-service:8004
+      KAFKA_BROKER: redpanda:9092
+      KAFKA_ALERT_TOPIC: ${KAFKA_ALERT_TOPIC}
+    expose:
+      - "8001"
+    labels:
+      - "traefik.enable=false"
+    networks:
+      - stock-network
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+    restart: unless-stopped
+
+
+  # Market Service — Bhavcopy ingestion + price history API
+  market-service:
+    build: ./backend/market-service
+    env_file: .env
+    environment:
+      DB_NAME: market_db
+      SERVICE_PORT: 8006
+    expose:
+      - "8006"
+    networks:
+      - stock-network
+    depends_on:
+      db:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=false"
+    restart: unless-stopped
+
+  # Scanner Service
+  scanner-service:
+    build: ./backend/scanner-service
+    container_name: scanner-service
+    env_file: .env
+    environment:
+      DB_NAME: scanner_db
+      SERVICE_PORT: 8005
+      USER_SERVICE_URL: http://user-service:8004
+      MARKET_SERVICE_URL: http://market-service:8006
+    expose:
+      - "8005"
+    networks:
+      - stock-network
+    depends_on:
+      db:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+      market-service:
+        condition: service_started
+    labels:
+      - "traefik.enable=false"
+    restart: unless-stopped
+
+  # Frontend (React/Vite)
+  frontend:
+    build: ./frontend
+    # NOTE: The Dockerfile runs 'serve' on port 3000. Traefik must look for 3000.
+    expose:
+      - "3000"
+    depends_on:
+      - api-gateway
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.frontend.entrypoints=web"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000" # <-- FIXED PORT to 3000
+    environment:
+      # Correct YAML syntax and path: Traefik resolves this internally.
+      VITE_API_BASE_URL: http://api-gateway:8000
+    networks:
+      - stock-network
+
+volumes:
+  db_data: # Define the volume for PostgreSQL data persistence
+
+networks:
+  stock-network:
+    driver: bridge # Explicitly define the custom bridge network

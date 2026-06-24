@@ -1,0 +1,15 @@
+api:
+  dashboard: true
+  insecure: true
+
+providers:
+  docker:
+    exposedByDefault: false
+    network: stock-network
+
+entryPoints:
+  web:
+    address: ":80"
+
+log:
+  level: INFO
