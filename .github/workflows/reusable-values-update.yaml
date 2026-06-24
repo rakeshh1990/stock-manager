@@ -55,3 +55,13 @@ jobs:
 
           branch: ci/${{ inputs.service }}-${{ inputs.image_tag }}
           delete-branch: true
+
+      - name: Enable auto merge
+        if: steps.pr.outputs.pull-request-number != ''
+        run: |
+          gh pr merge "${{ steps.pr.outputs.pull-request-number }}" \
+            --repo rakeshh1990/my-gitops \
+            --squash \
+            --auto
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_TOKEN }}
