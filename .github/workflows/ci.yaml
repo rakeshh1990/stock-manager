@@ -63,3 +63,31 @@ jobs:
       values_file: values/stock-alert/gateway.yaml
       image_repository: ghcr.io/rakeshh1990/stock-alert-api-gateway
       image_tag: ${{ needs.build-gateway.outputs.tag }}
+
+
+  build-auth-service:
+    uses: ./.github/workflows/reusable-build.yaml
+
+    permissions:
+      contents: read
+      packages: write
+
+    with:
+      service: auth-service
+      context: ./auth-service
+      dockerfile: ./auth-service/Dockerfile
+      image_name: stock-alert-auth-service
+
+  update-auth-service:
+
+    needs: build-auth-service
+
+    uses: ./.github/workflows/reusable-values-update.yaml
+
+    secrets: inherit
+
+    with:
+      service: auth-service
+      values_file: values/stock-alert/auth-service.yaml
+      image_repository: ghcr.io/rakeshh1990/stock-alert-auth-service
+      image_tag: ${{ needs.build-auth-service.outputs.tag }}
