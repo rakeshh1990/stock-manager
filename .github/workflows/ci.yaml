@@ -9,8 +9,51 @@ permissions:
   contents: read
   packages: write
 
+
 jobs:
+
+################################################################################
+# Detect changed services
+################################################################################
+
+  detect:
+    runs-on: ubuntu-latest
+
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      gateway: ${{ steps.filter.outputs.gateway }}
+      auth: ${{ steps.filter.outputs.auth }}
+
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+
+        with:
+          filters: |
+
+            frontend:
+              - 'frontend/**'
+
+            gateway:
+              - 'api-gateway/**'
+
+            auth:
+              - 'backend/auth-service/**'
+
+
+
+################################################################################
+# Frontend
+################################################################################
+
   build-frontend:
+
+    needs: detect
+    if: needs.detect.outputs.frontend == 'true'
+
     uses: ./.github/workflows/reusable-build.yaml
 
     permissions:
@@ -23,8 +66,13 @@ jobs:
       dockerfile: ./frontend/Dockerfile
       image_name: stock-alert-frontend
 
+
   update-frontend:
-    needs: build-frontend
+
+    needs:
+      - detect
+      - build-frontend
+    if: always() && needs.detect.outputs.frontend == 'true'
 
     uses: ./.github/workflows/reusable-values-update.yaml
 
@@ -37,7 +85,16 @@ jobs:
       image_tag: ${{ needs.build-frontend.outputs.tag }}
 
 
+
+################################################################################
+# Gateway
+################################################################################
+
   build-gateway:
+
+    needs: detect
+    if: needs.detect.outputs.gateway == 'true'
+
     uses: ./.github/workflows/reusable-build.yaml
 
     permissions:
@@ -50,9 +107,13 @@ jobs:
       dockerfile: ./api-gateway/Dockerfile
       image_name: stock-alert-api-gateway
 
+
   update-gateway:
 
-    needs: build-gateway
+    needs:
+      - detect
+      - build-gateway
+    if: always() && needs.detect.outputs.gateway == 'true'
 
     uses: ./.github/workflows/reusable-values-update.yaml
 
@@ -65,7 +126,16 @@ jobs:
       image_tag: ${{ needs.build-gateway.outputs.tag }}
 
 
+
+################################################################################
+# Auth Service
+################################################################################
+
   build-auth-service:
+
+    needs: detect
+    if: needs.detect.outputs.auth == 'true'
+
     uses: ./.github/workflows/reusable-build.yaml
 
     permissions:
@@ -78,9 +148,13 @@ jobs:
       dockerfile: ./backend/auth-service/Dockerfile
       image_name: stock-alert-auth-service
 
+
   update-auth-service:
 
-    needs: build-auth-service
+    needs:
+      - detect
+      - build-auth-service
+    if: always() && needs.detect.outputs.auth == 'true'
 
     uses: ./.github/workflows/reusable-values-update.yaml
 
