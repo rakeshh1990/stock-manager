@@ -35,3 +35,31 @@ jobs:
       values_file: values/stock-alert/frontend.yaml
       image_repository: ghcr.io/rakeshh1990/stock-alert-frontend
       image_tag: ${{ needs.build-frontend.outputs.tag }}
+
+
+  build-gateway:
+    uses: ./.github/workflows/reusable-build.yaml
+
+    permissions:
+      contents: read
+      packages: write
+
+    with:
+      service: api-gateway
+      context: ./api-gateway
+      dockerfile: ./api-gateway/Dockerfile
+      image_name: stock-alert-api-gateway
+
+  update-gateway:
+
+    needs: build-gateway
+
+    uses: ./.github/workflows/reusable-values-update.yaml
+
+    secrets: inherit
+
+    with:
+      service: gateway
+      values_file: values/stock-alert/gateway.yaml
+      image_repository: ghcr.io/rakeshh1990/stock-alert-api-gateway
+      image_tag: ${{ needs.build-gateway.outputs.tag }}
