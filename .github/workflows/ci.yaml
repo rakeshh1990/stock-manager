@@ -26,6 +26,7 @@ jobs:
       user: ${{ steps.filter.outputs.user }}
       analyzer: ${{ steps.filter.outputs.analyzer }}
       notifier: ${{ steps.filter.outputs.notifier }}
+      market: ${{ steps.filter.outputs.market }}
 
     steps:
 
@@ -54,6 +55,9 @@ jobs:
 
             notifier:
               - 'backend/notifier-service/**'
+
+            market:
+              - 'backend/market-service/**'
 
 
 ################################################################################
@@ -299,3 +303,44 @@ jobs:
       values_file: values/stock-alert/notifier-service.yaml
       image_repository: ghcr.io/rakeshh1990/stock-alert-notifier-service
       image_tag: ${{ needs.build-notifier-service.outputs.tag }}
+
+
+
+################################################################################
+# Market Service
+################################################################################
+
+  build-market-service:
+
+    needs: detect
+    if: needs.detect.outputs.market == 'true'
+
+    uses: ./.github/workflows/reusable-build.yaml
+
+    permissions:
+      contents: read
+      packages: write
+
+    with:
+      service: market-service
+      context: ./backend/market-service
+      dockerfile: ./backend/market-service/Dockerfile
+      image_name: stock-alert-market-service
+
+
+  update-market-service:
+
+    needs:
+      - detect
+      - build-market-service
+    if: always() && needs.detect.outputs.market == 'true'
+
+    uses: ./.github/workflows/reusable-values-update.yaml
+
+    secrets: inherit
+
+    with:
+      service: market-service
+      values_file: values/stock-alert/market-service.yaml
+      image_repository: ghcr.io/rakeshh1990/stock-alert-market-service
+      image_tag: ${{ needs.build-market-service.outputs.tag }}
