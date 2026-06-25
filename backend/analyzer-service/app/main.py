@@ -2,7 +2,7 @@
 from typing import Dict
 
 # app = FastAPI(title="Analyzer Service")
-
+# Deploy trigger commit.
 
 # backend/analyzer-service/app/main.py
 from fastapi import FastAPI, HTTPException
