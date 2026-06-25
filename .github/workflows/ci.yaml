@@ -27,6 +27,7 @@ jobs:
       analyzer: ${{ steps.filter.outputs.analyzer }}
       notifier: ${{ steps.filter.outputs.notifier }}
       market: ${{ steps.filter.outputs.market }}
+      scanner: ${{ steps.filter.outputs.scanner }}
 
     steps:
 
@@ -58,6 +59,9 @@ jobs:
 
             market:
               - 'backend/market-service/**'
+
+            scanner:
+              - 'backend/scanner-service/**'
 
 
 ################################################################################
@@ -344,3 +348,44 @@ jobs:
       values_file: values/stock-alert/market-service.yaml
       image_repository: ghcr.io/rakeshh1990/stock-alert-market-service
       image_tag: ${{ needs.build-market-service.outputs.tag }}
+
+
+
+################################################################################
+# Scanner Service
+################################################################################
+
+  build-scanner-service:
+
+    needs: detect
+    if: needs.detect.outputs.scanner == 'true'
+
+    uses: ./.github/workflows/reusable-build.yaml
+
+    permissions:
+      contents: read
+      packages: write
+
+    with:
+      service: scanner-service
+      context: ./backend/scanner-service
+      dockerfile: ./backend/scanner-service/Dockerfile
+      image_name: stock-alert-scanner-service
+
+
+  update-scanner-service:
+
+    needs:
+      - detect
+      - build-scanner-service
+    if: always() && needs.detect.outputs.scanner == 'true'
+
+    uses: ./.github/workflows/reusable-values-update.yaml
+
+    secrets: inherit
+
+    with:
+      service: scanner-service
+      values_file: values/stock-alert/scanner-service.yaml
+      image_repository: ghcr.io/rakeshh1990/stock-alert-scanner-service
+      image_tag: ${{ needs.build-scanner-service.outputs.tag }}
