@@ -25,6 +25,7 @@ jobs:
       auth: ${{ steps.filter.outputs.auth }}
       user: ${{ steps.filter.outputs.user }}
       analyzer: ${{ steps.filter.outputs.analyzer }}
+      notifier: ${{ steps.filter.outputs.notifier }}
 
     steps:
 
@@ -51,6 +52,8 @@ jobs:
             analyzer:
               - 'backend/analyzer-service/**'
 
+            notifier:
+              - 'backend/notifier-service/**'
 
 
 ################################################################################
@@ -255,3 +258,44 @@ jobs:
       values_file: values/stock-alert/analyzer-service.yaml
       image_repository: ghcr.io/rakeshh1990/stock-alert-analyzer-service
       image_tag: ${{ needs.build-analyzer-service.outputs.tag }}
+
+
+
+################################################################################
+# Notifier Service
+################################################################################
+
+  build-notifier-service:
+
+    needs: detect
+    if: needs.detect.outputs.notifier == 'true'
+
+    uses: ./.github/workflows/reusable-build.yaml
+
+    permissions:
+      contents: read
+      packages: write
+
+    with:
+      service: notifier-service
+      context: ./backend/notifier-service
+      dockerfile: ./backend/notifier-service/Dockerfile
+      image_name: stock-alert-notifier-service
+
+
+  update-notifier-service:
+
+    needs:
+      - detect
+      - build-notifier-service
+    if: always() && needs.detect.outputs.notifier == 'true'
+
+    uses: ./.github/workflows/reusable-values-update.yaml
+
+    secrets: inherit
+
+    with:
+      service: notifier-service
+      values_file: values/stock-alert/notifier-service.yaml
+      image_repository: ghcr.io/rakeshh1990/stock-alert-notifier-service
+      image_tag: ${{ needs.build-notifier-service.outputs.tag }}
