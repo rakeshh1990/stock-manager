@@ -24,6 +24,7 @@ jobs:
       gateway: ${{ steps.filter.outputs.gateway }}
       auth: ${{ steps.filter.outputs.auth }}
       user: ${{ steps.filter.outputs.user }}
+      analyzer: ${{ steps.filter.outputs.analyzer }}
 
     steps:
 

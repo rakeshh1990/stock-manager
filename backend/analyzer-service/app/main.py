@@ -286,8 +286,8 @@ def score_and_recommend(ind: dict):
 def get_stock_data(symbol: str):
     """
     Fetch stock data with fallback:
-      1️ Try Yahoo Finance (via yfinance)
-      2️ Fallback to NSE (for Indian stocks)
+      1️⃣ Try Yahoo Finance (via yfinance)
+      2️⃣ Fallback to NSE (for Indian stocks)
     """
     # --- Try Yahoo Finance ---
     try:
