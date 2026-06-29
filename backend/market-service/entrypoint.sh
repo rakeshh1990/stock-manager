@@ -16,4 +16,4 @@ echo "Running Alembic migrations..."
 alembic -c /app/app/alembic.ini upgrade head
 
 echo "Starting Market Service..."
-uvicorn app.main:app --host 0.0.0.0 --port ${SERVICE_PORT:-8006}
+uvicorn app.main:app --host 0.0.0.0 --port ${SERVICE_PORT:-8000}

@@ -16,4 +16,4 @@ echo "Running Alembic migrations..."
 alembic -c /app/app/alembic.ini upgrade head
 
 echo "Starting Scanner Service..."
-uvicorn app.main:app --host 0.0.0.0 --port ${SERVICE_PORT:-8005}
+uvicorn app.main:app --host 0.0.0.0 --port ${SERVICE_PORT:-8000}
